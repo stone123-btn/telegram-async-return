@@ -1,0 +1,161 @@
+{
+  "id": "telegram-async-return",
+  "name": "Telegram Async Return",
+  "description": "Reliable async result tracking, resend, and recovery for Telegram tasks that outlive the webhook response window.",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      },
+      "storePath": {
+        "type": "string"
+      },
+      "runtimeBin": {
+        "type": "string"
+      },
+      "ackTemplate": {
+        "type": "string"
+      },
+      "ackOnAsyncStart": {
+        "type": "boolean"
+      },
+      "preferExistingTaskWindowSeconds": {
+        "type": "number",
+        "minimum": 0
+      },
+      "defaultStatusLookbackSeconds": {
+        "type": "number",
+        "minimum": 0
+      },
+      "autoResendOnDeliveryFailure": {
+        "type": "boolean"
+      },
+      "resend": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "maxAttempts": {
+            "type": "number",
+            "minimum": 1
+          },
+          "minDelayMs": {
+            "type": "number",
+            "minimum": 0
+          },
+          "maxDelayMs": {
+            "type": "number",
+            "minimum": 0
+          },
+          "jitter": {
+            "type": "boolean"
+          }
+        }
+      },
+      "recovery": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "scanOnStartup": {
+            "type": "boolean"
+          },
+          "maxRecoveryTasks": {
+            "type": "number",
+            "minimum": 1
+          }
+        }
+      },
+      "dedupe": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "promptHash": {
+            "type": "boolean"
+          },
+          "replyToMessage": {
+            "type": "boolean"
+          },
+          "windowSeconds": {
+            "type": "number",
+            "minimum": 0
+          }
+        }
+      },
+      "diagnostics": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "logLifecycle": {
+            "type": "boolean"
+          },
+          "logDeliveryFailures": {
+            "type": "boolean"
+          },
+          "logRecovery": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": {
+      "label": "Enable Telegram Async Return",
+      "help": "Enable async task tracking and final-result writeback for Telegram long-running tasks."
+    },
+    "storePath": {
+      "label": "State Store Path",
+      "help": "Local path for async task state and delivery tracking. SQLite is recommended."
+    },
+    "runtimeBin": {
+      "label": "Runtime Binary",
+      "help": "Optional override for the async runtime CLI path when not using the default package-installed binary.",
+      "advanced": true
+    },
+    "ackTemplate": {
+      "label": "Acknowledgement Template",
+      "help": "Short Telegram message sent when a task is accepted for background processing."
+    },
+    "ackOnAsyncStart": {
+      "label": "Send Background Ack",
+      "help": "Send an immediate Telegram acknowledgement when a task switches into async-return mode."
+    },
+    "preferExistingTaskWindowSeconds": {
+      "label": "Reuse Existing Task Window",
+      "help": "Time window for preferring an existing in-flight or recently completed task instead of starting a duplicate."
+    },
+    "defaultStatusLookbackSeconds": {
+      "label": "Default Status Lookback",
+      "help": "Default lookback window for recent task lookup when the user asks about a prior long-running task."
+    },
+    "autoResendOnDeliveryFailure": {
+      "label": "Auto Resend on Delivery Failure",
+      "help": "Automatically retry final Telegram delivery when execution succeeded but writeback failed."
+    },
+    "resend": {
+      "label": "Resend Policy",
+      "help": "Retry policy for final Telegram result delivery."
+    },
+    "recovery": {
+      "label": "Recovery Policy",
+      "help": "Startup reconciliation and recovery settings for unfinished or undelivered tasks."
+    },
+    "dedupe": {
+      "label": "Duplicate Detection",
+      "help": "Controls how repeated Telegram follow-ups are matched to existing async tasks."
+    },
+    "diagnostics": {
+      "label": "Diagnostics",
+      "help": "Enable extra lifecycle, delivery, and recovery logs for troubleshooting.",
+      "advanced": true
+    }
+  }
+}

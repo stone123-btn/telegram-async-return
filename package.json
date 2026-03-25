@@ -1,0 +1,41 @@
+{
+  "name": "@openclaw/telegram-async-return",
+  "version": "0.1.0",
+  "description": "OpenClaw plugin package for reliable Telegram async task tracking, resend, and recovery.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./plugin": "./dist/index.js"
+  },
+  "bin": {
+    "openclaw-telegram-async-return": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "skills"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "openclaw",
+    "telegram",
+    "plugin",
+    "async-return",
+    "delivery"
+  ],
+  "license": "UNLICENSED",
+  "dependencies": {
+    "better-sqlite3": "^12.8.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "vitest": "^4.1.1"
+  }
+}
