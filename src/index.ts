@@ -9,6 +9,13 @@ import {
   handleMessageSent,
   handleAgentEnd,
 } from "./hooks.js";
+import type {
+  GatewayStartupEvent,
+  GatewayShutdownEvent,
+  MessageReceivedEvent,
+  MessageSentEvent,
+  AgentEndEvent,
+} from "./types.js";
 
 const plugin = {
   id: "telegram-async-return",
@@ -44,44 +51,24 @@ const plugin = {
       handler: (context) => commandHandler(context as Parameters<typeof commandHandler>[0]),
     });
 
-    api.on("gateway_start", async (event) => {
-      await handleGatewayStart({
-        api,
-        event,
-        pluginConfig,
-      });
+    api.on("gateway:startup", async (event) => {
+      await handleGatewayStart({ api, event: event as GatewayStartupEvent, pluginConfig });
     });
 
-    api.on("gateway_stop", async (event) => {
-      await handleGatewayStop({
-        api,
-        event,
-        pluginConfig,
-      });
+    api.on("gateway:shutdown", async (event) => {
+      await handleGatewayStop({ api, event: event as GatewayShutdownEvent, pluginConfig });
     });
 
-    api.on("message_received", async (event) => {
-      await handleMessageReceived({
-        api,
-        event,
-        pluginConfig,
-      });
+    api.on("message:received", async (event) => {
+      await handleMessageReceived({ api, event: event as MessageReceivedEvent, pluginConfig });
     });
 
-    api.on("message_sent", async (event) => {
-      await handleMessageSent({
-        api,
-        event,
-        pluginConfig,
-      });
+    api.on("message:sent", async (event) => {
+      await handleMessageSent({ api, event: event as MessageSentEvent, pluginConfig });
     });
 
-    api.on("agent_end", async (event) => {
-      await handleAgentEnd({
-        api,
-        event,
-        pluginConfig,
-      });
+    api.on("agent:end", async (event) => {
+      await handleAgentEnd({ api, event: event as AgentEndEvent, pluginConfig });
     });
   },
 };

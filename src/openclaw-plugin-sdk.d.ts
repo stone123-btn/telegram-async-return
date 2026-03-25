@@ -1,4 +1,11 @@
 declare module "openclaw/plugin-sdk" {
+  export interface OpenClawEvent {
+    type: string;
+    action: string;
+    sessionKey?: string;
+    context?: Record<string, unknown>;
+  }
+
   export interface OpenClawPluginApi {
     logger?: {
       info?: (...args: unknown[]) => void;
@@ -16,6 +23,16 @@ declare module "openclaw/plugin-sdk" {
       acceptsArgs?: boolean;
       handler: (context: unknown) => unknown | Promise<unknown>;
     }): void;
-    on(event: string, handler: (event: unknown) => unknown | Promise<unknown>): void;
+    on<E extends OpenClawEvent = OpenClawEvent>(
+      event: string,
+      handler: (event: E) => void | Promise<void>,
+    ): void;
   }
+}
+
+declare module "openclaw/hooks" {
+  import type { OpenClawEvent } from "openclaw/plugin-sdk";
+  export type HookHandler<E extends OpenClawEvent = OpenClawEvent> = (
+    event: E,
+  ) => void | Promise<void>;
 }

@@ -1,11 +1,19 @@
 import { resolveTelegramAsyncReturnConfig } from "./config.js";
 import { createTelegramAsyncReturnService } from "./service.js";
 import { createDeliveryScheduler, type DeliveryScheduler } from "./scheduler.js";
-import type { HookContext } from "./types.js";
+import type {
+  HookContext,
+  GatewayStartupEvent,
+  GatewayShutdownEvent,
+  MessageReceivedEvent,
+  MessageSentEvent,
+  AgentEndEvent,
+  OpenClawEvent,
+} from "./types.js";
 
 const SCHEDULER_KEY = Symbol.for("openclaw.telegram-async-return.scheduler");
 
-export async function handleGatewayStart(context: HookContext) {
+export async function handleGatewayStart(context: HookContext<GatewayStartupEvent>) {
   const config = resolveTelegramAsyncReturnConfig(context.pluginConfig, context.api.resolvePath);
   if (!config.enabled) {
     return;
@@ -20,7 +28,7 @@ export async function handleGatewayStart(context: HookContext) {
 
   if (config.recovery.enabled && config.recovery.scanOnStartup) {
     const recovery = await service.recoverPendingTasks();
-    log(context, "info", `gateway_start recovered=${recovery.repairedTaskIds.length}`);
+    log(context, "info", `gateway:startup recovered=${recovery.repairedTaskIds.length}`);
   }
 
   if (config.autoResendOnDeliveryFailure) {
@@ -32,11 +40,11 @@ export async function handleGatewayStart(context: HookContext) {
     });
     scheduler.start();
     storeScheduler(context.api.runtime, scheduler);
-    log(context, "info", "delivery scheduler started on gateway_start");
+    log(context, "info", "delivery scheduler started on gateway:startup");
   }
 }
 
-export async function handleGatewayStop(context: HookContext) {
+export async function handleGatewayStop(context: HookContext<GatewayShutdownEvent>) {
   const config = resolveTelegramAsyncReturnConfig(context.pluginConfig, context.api.resolvePath);
   if (!config.enabled) {
     return;
@@ -47,10 +55,10 @@ export async function handleGatewayStop(context: HookContext) {
     scheduler.stop();
   }
 
-  log(context, "info", "gateway_stop async-return idle");
+  log(context, "info", "gateway:shutdown async-return idle");
 }
 
-export async function handleMessageReceived(context: HookContext) {
+export async function handleMessageReceived(context: HookContext<MessageReceivedEvent>) {
   const config = resolveTelegramAsyncReturnConfig(context.pluginConfig, context.api.resolvePath);
   if (!config.enabled || !isTelegramEvent(context.event) || !shouldTrackAsyncTask(context.event)) {
     return;
@@ -63,25 +71,7 @@ export async function handleMessageReceived(context: HookContext) {
     resolvePath: context.api.resolvePath,
   });
 
-  const chatId = readString(context.event, [
-    ["chatId"],
-    ["chat", "id"],
-    ["message", "chat", "id"],
-    ["payload", "chatId"],
-  ]);
-  const threadId = readString(context.event, [["threadId"], ["messageThreadId"], ["message", "threadId"]]);
-  const sessionId = readString(context.event, [["sessionId"], ["session", "id"], ["payload", "sessionId"]]);
-  const sourceMessageId = readString(context.event, [
-    ["messageId"],
-    ["message", "id"],
-    ["payload", "messageId"],
-  ]);
-  const prompt = readString(context.event, [
-    ["text"],
-    ["message", "text"],
-    ["prompt"],
-    ["payload", "prompt"],
-  ]);
+  const { chatId, threadId, sessionId, messageId: sourceMessageId, text: prompt } = context.event.context;
 
   const tracked = await service.trackTask({
     chatId,
@@ -90,7 +80,7 @@ export async function handleMessageReceived(context: HookContext) {
     sourceMessageId,
     prompt,
     metadata: {
-      source: "message_received",
+      source: "message:received",
       transport: "telegram",
     },
   });
@@ -100,15 +90,15 @@ export async function handleMessageReceived(context: HookContext) {
   }
 
   if (config.ackOnAsyncStart && !tracked.task.ackSentAt) {
-    await maybeReply(context.event, config.ackTemplate);
+    await context.event.context.reply?.(config.ackTemplate);
     await service.acknowledgeTask(tracked.task.taskId, config.ackTemplate);
   }
 
-  log(context, "info", `message_received task=${tracked.task.taskId} reused=${String(tracked.reused)}`);
+  log(context, "info", `message:received task=${tracked.task.taskId} reused=${String(tracked.reused)}`);
   return tracked;
 }
 
-export async function handleMessageSent(context: HookContext) {
+export async function handleMessageSent(context: HookContext<MessageSentEvent>) {
   const config = resolveTelegramAsyncReturnConfig(context.pluginConfig, context.api.resolvePath);
   if (!config.enabled || !isTelegramEvent(context.event)) {
     return;
@@ -121,29 +111,22 @@ export async function handleMessageSent(context: HookContext) {
     resolvePath: context.api.resolvePath,
   });
 
-  const taskId = readString(context.event, [
-    ["taskId"],
-    ["payload", "taskId"],
-    ["metadata", "taskId"],
-    ["metadata", "asyncReturnTaskId"],
-  ]);
+  const { taskId, kind, error } = context.event.context;
 
   if (!taskId) {
     return;
   }
 
-  const messageKind = readString(context.event, [["kind"], ["payload", "kind"], ["message", "kind"]]);
-  if (messageKind === "delivery_failed") {
-    const error = readString(context.event, [["error"], ["payload", "error"], ["message", "error"]]) ?? "Telegram delivery failed";
-    await service.markDeliveryFailed(taskId, error);
+  if (kind === "delivery_failed") {
+    await service.markDeliveryFailed(taskId, error ?? "Telegram delivery failed");
     return;
   }
 
   await service.markDelivered(taskId);
-  log(context, "info", `message_sent delivered task=${taskId}`);
+  log(context, "info", `message:sent delivered task=${taskId}`);
 }
 
-export async function handleAgentEnd(context: HookContext) {
+export async function handleAgentEnd(context: HookContext<AgentEndEvent>) {
   const config = resolveTelegramAsyncReturnConfig(context.pluginConfig, context.api.resolvePath);
   if (!config.enabled) {
     return;
@@ -156,18 +139,7 @@ export async function handleAgentEnd(context: HookContext) {
     resolvePath: context.api.resolvePath,
   });
 
-  const taskId = readString(context.event, [["taskId"], ["payload", "taskId"], ["metadata", "taskId"]]);
-  const chatId = readString(context.event, [["chatId"], ["payload", "chatId"], ["chat", "id"]]);
-  const sessionId = readString(context.event, [["sessionId"], ["session", "id"], ["payload", "sessionId"]]);
-  const status = readString(context.event, [["status"], ["result", "status"], ["payload", "status"]]);
-  const error = readString(context.event, [["error"], ["payload", "error"], ["result", "error"]]);
-  const resultSummary = readString(context.event, [
-    ["summary"],
-    ["result", "summary"],
-    ["payload", "summary"],
-    ["result", "text"],
-  ]);
-  const resultPayload = readValue(context.event, [["result"], ["payload", "result"], ["output"]]);
+  const { taskId, chatId, sessionId, status, error, resultSummary, resultPayload } = context.event.context;
 
   const completed = await service.completeTask({
     taskId,
@@ -178,7 +150,7 @@ export async function handleAgentEnd(context: HookContext) {
     resultPayload,
     error,
     metadata: {
-      source: "agent_end",
+      source: "agent:end",
       status,
     },
   });
@@ -191,99 +163,41 @@ export async function handleAgentEnd(context: HookContext) {
     await service.resendTask(completed.taskId);
   }
 
-  log(context, "info", `agent_end task=${completed.taskId} state=${completed.state}`);
+  log(context, "info", `agent:end task=${completed.taskId} state=${completed.state}`);
   return completed;
 }
 
-function isTelegramEvent(event: unknown) {
-  const channel = readString(event, [["channel"], ["transport"], ["source"], ["payload", "channel"]]);
-  if (channel) {
-    return channel.toLowerCase() === "telegram";
-  }
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-  const chatId = readString(event, [["chatId"], ["chat", "id"], ["message", "chat", "id"]]);
-  return Boolean(chatId);
+function isTelegramEvent(event: MessageReceivedEvent | MessageSentEvent): boolean {
+  return event.context.channel === "telegram";
 }
 
-function shouldTrackAsyncTask(event: unknown) {
-  const forcedAsync = readBoolean(event, [["asyncReturn"], ["payload", "asyncReturn"], ["metadata", "asyncReturn"]]);
-  if (forcedAsync) {
+function shouldTrackAsyncTask(event: MessageReceivedEvent): boolean {
+  if (event.context.asyncReturn) {
     return true;
   }
 
-  const text = readString(event, [["text"], ["message", "text"], ["prompt"], ["payload", "prompt"]]) ?? "";
+  const text = event.context.text ?? "";
   if (text.length >= 120) {
     return true;
   }
 
-  const tags = readValue(event, [["tags"], ["metadata", "tags"], ["payload", "tags"]]);
+  const tags = event.context.tags;
   if (Array.isArray(tags)) {
-    return tags.some((tag) => typeof tag === "string" && ["long-task", "async", "background"].includes(tag));
+    return tags.some((tag) => ["long-task", "async", "background"].includes(tag));
   }
 
   return false;
 }
 
-async function maybeReply(event: unknown, message: string) {
-  const reply = readValue(event, [["reply"], ["respond"]]);
-  if (typeof reply === "function") {
-    await reply(message);
-  }
-}
-
-function log(context: HookContext, level: "info" | "warn" | "error" | "debug", message: string) {
+function log<E extends OpenClawEvent>(context: HookContext<E>, level: "info" | "warn" | "error" | "debug", message: string) {
   const method = context.api.logger?.[level];
   if (typeof method === "function") {
     method(`[telegram-async-return] ${message}`);
   }
-}
-
-function readString(value: unknown, paths: string[][]) {
-  for (const path of paths) {
-    const candidate = readValue(value, [path]);
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate;
-    }
-
-    if (typeof candidate === "number") {
-      return String(candidate);
-    }
-  }
-
-  return undefined;
-}
-
-function readBoolean(value: unknown, paths: string[][]) {
-  for (const path of paths) {
-    const candidate = readValue(value, [path]);
-    if (typeof candidate === "boolean") {
-      return candidate;
-    }
-  }
-
-  return false;
-}
-
-function readValue(value: unknown, paths: string[][]) {
-  for (const path of paths) {
-    let current: unknown = value;
-    let missing = false;
-
-    for (const segment of path) {
-      if (typeof current !== "object" || current === null || !(segment in current)) {
-        missing = true;
-        break;
-      }
-
-      current = (current as Record<string, unknown>)[segment];
-    }
-
-    if (!missing) {
-      return current;
-    }
-  }
-
-  return undefined;
 }
 
 function storeScheduler(runtime: unknown, scheduler: DeliveryScheduler) {
@@ -301,9 +215,12 @@ function loadScheduler(runtime: unknown): DeliveryScheduler | undefined {
   return undefined;
 }
 
-function buildDeliverFn(context: HookContext) {
+function buildDeliverFn<E extends OpenClawEvent>(context: HookContext<E>) {
   return async (task: { taskId: string; chatId?: string; resultSummary?: string; resultPayload?: unknown }) => {
-    const sendMessage = readValue(context.api.runtime, [["sendTelegramMessage"], ["telegram", "send"]]);
+    const runtime = context.api.runtime;
+    const sendMessage = runtime?.["sendTelegramMessage"] as
+      | ((msg: Record<string, unknown>) => Promise<void>)
+      | undefined;
     if (typeof sendMessage === "function") {
       await sendMessage({
         chatId: task.chatId,
