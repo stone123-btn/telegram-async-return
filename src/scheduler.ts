@@ -90,7 +90,7 @@ export function createDeliveryScheduler(options: DeliverySchedulerOptions): Deli
           } else {
             await service.markDeliveryFailed(task.taskId, "deliver() returned false");
             result.failed.push(task.taskId);
-            log("warn", `delivery returned false for ${task.taskId} — runtime.sendTelegramMessage may not be registered`);
+            log("warn", `delivery returned false for ${task.taskId} — api.sendMessage may not be available`);
           }
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);

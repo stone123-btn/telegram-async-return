@@ -42,6 +42,8 @@ const plugin = {
       pluginConfig,
       logger: api.logger,
       runtime: api.runtime,
+      sendMessage: api.sendMessage,
+      resolvePath: api.resolvePath,
     });
 
     api.registerCommand({
@@ -51,25 +53,36 @@ const plugin = {
       handler: (context) => commandHandler(context as Parameters<typeof commandHandler>[0]),
     });
 
-    api.on("gateway:startup", async (event) => {
+    // Register hooks in both colon and underscore formats for compatibility
+    const onGatewayStart = async (event: unknown) => {
       await handleGatewayStart({ api, event: event as GatewayStartupEvent, pluginConfig });
-    });
+    };
+    api.on("gateway:startup", onGatewayStart);
+    api.on("gateway_start", onGatewayStart);
 
-    api.on("gateway:shutdown", async (event) => {
+    const onGatewayStop = async (event: unknown) => {
       await handleGatewayStop({ api, event: event as GatewayShutdownEvent, pluginConfig });
-    });
+    };
+    api.on("gateway:shutdown", onGatewayStop);
+    api.on("gateway_shutdown", onGatewayStop);
 
-    api.on("message:received", async (event) => {
+    const onMessageReceived = async (event: unknown) => {
       await handleMessageReceived({ api, event: event as MessageReceivedEvent, pluginConfig });
-    });
+    };
+    api.on("message:received", onMessageReceived);
+    api.on("message_received", onMessageReceived);
 
-    api.on("message:sent", async (event) => {
+    const onMessageSent = async (event: unknown) => {
       await handleMessageSent({ api, event: event as MessageSentEvent, pluginConfig });
-    });
+    };
+    api.on("message:sent", onMessageSent);
+    api.on("message_sent", onMessageSent);
 
-    api.on("agent:end", async (event) => {
+    const onAgentEnd = async (event: unknown) => {
       await handleAgentEnd({ api, event: event as AgentEndEvent, pluginConfig });
-    });
+    };
+    api.on("agent:end", onAgentEnd);
+    api.on("agent_end", onAgentEnd);
   },
 };
 

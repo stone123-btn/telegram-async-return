@@ -1,11 +1,17 @@
 import { createTelegramAsyncReturnService } from "./service.js";
+import { getHookActivity } from "./hooks.js";
 import type {
   CommandContextLike,
   CommandResult,
   CreateTelegramAsyncReturnServiceOptions,
+  SendMessageFn,
 } from "./types.js";
 
-export function createAsyncReturnCommandHandler(options: CreateTelegramAsyncReturnServiceOptions) {
+interface AsyncReturnCommandHandlerOptions extends CreateTelegramAsyncReturnServiceOptions {
+  sendMessage?: SendMessageFn;
+}
+
+export function createAsyncReturnCommandHandler(options: AsyncReturnCommandHandlerOptions) {
   const service = createTelegramAsyncReturnService(options);
 
   return async function handleAsyncReturnCommand(context: CommandContextLike = {}): Promise<CommandResult> {
@@ -17,11 +23,16 @@ export function createAsyncReturnCommandHandler(options: CreateTelegramAsyncRetu
     switch (command) {
       case "health": {
         const data = await service.health();
+        const sendMessageAvailable = typeof options.sendMessage === "function";
+        const hookActivity = getHookActivity(options.runtime);
+        const hookSummary = hookActivity
+          ? `hooks=[${Object.entries(hookActivity).filter(([, v]) => v).map(([k]) => k).join(",") || "none"}]`
+          : "hooks=unknown";
         result = {
           ok: data.ok,
           action: "health",
-          message: `enabled=${String(data.enabled)} store=${data.storePath} runtime=${data.runtimeBin}`,
-          data,
+          message: `enabled=${String(data.enabled)} store=${data.storePath} sendMessage=${sendMessageAvailable ? "ok" : "missing"} ${hookSummary}`,
+          data: { ...data, sendMessageAvailable, hookActivity: hookActivity ?? null },
         };
         break;
       }
