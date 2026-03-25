@@ -65,6 +65,7 @@ const plugin = {
     };
     api.on("gateway:shutdown", onGatewayStop);
     api.on("gateway_shutdown", onGatewayStop);
+    api.on("gateway_stop", onGatewayStop);
 
     const onMessageReceived = async (event: unknown) => {
       await handleMessageReceived({ api, event: event as MessageReceivedEvent, pluginConfig });
