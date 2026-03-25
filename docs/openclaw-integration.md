@@ -1,0 +1,302 @@
+# OpenClaw 集成指南 — telegram-async-return
+
+本文档供 OpenClaw 运行时环境参考，说明本插件对宿主环境的依赖、事件契约、发送层要求，以及集成验证方法。
+
+---
+
+## 插件注册
+
+插件通过标准 OpenClaw 插件接口注册：
+
+```typescript
+register(api: OpenClawPluginApi) {
+  api.registerService(service);
+  api.registerCommand(command);
+  api.on(eventName, handler);
+}
+```
+
+注册时使用的接口：
+
+| 接口 | 用途 | 是否必须 |
+|------|------|---------|
+| `api.on(event, handler)` | 监听生命周期事件 | 必须 |
+| `api.registerService(service)` | 注册任务追踪服务 | 必须 |
+| `api.registerCommand(command)` | 注册 `/async-return` 命令 | 必须 |
+| `api.logger` | 日志输出 | 可选（缺失时静默） |
+| `api.runtime` | 运行时对象（用于存储 scheduler 实例和 hook 活动） | 可选 |
+| `api.resolvePath(input)` | 路径解析（用于 storePath） | 可选 |
+| `api.sendMessage(msg)` | 发送消息到用户 | 可选（见下方发送层说明） |
+| `api.pluginConfig` | 插件配置对象 | 可选（缺失时使用默认配置） |
+
+---
+
+## 发送层（api.sendMessage）
+
+### 接口定义
+
+```typescript
+sendMessage?: (msg: {
+  chatId?: string;
+  text: string;
+  metadata?: Record<string, unknown>;
+}) => Promise<void>;
+```
+
+### 可用性
+
+**`api.sendMessage()` 并非所有 OpenClaw 环境都提供。**
+
+- 部分 OpenClaw 版本/分支提供此接口
+- 插件在注册时检测该接口是否存在，并在 health 命令中报告
+- 在 delivery 时通过 `typeof sendMessage === "function"` 动态检测
+
+### 缺失时的行为
+
+若 `api.sendMessage()` 不存在：
+
+1. 插件正常注册，基础追踪功能不受影响
+2. 首次调用 delivery 时记录 `warn` 日志：`api.sendMessage is not available`
+3. delivery 返回 `false`，任务标记为 `delivery_failed`
+4. scheduler 会根据配置重试，但重试同样失败
+5. 不会抛出异常或导致插件崩溃
+
+### 适配指南
+
+若当前环境不提供 `api.sendMessage()` 但需要自动回传，有两种适配路径：
+
+**方式 A：在 OpenClaw 宿主中注入**
+
+```typescript
+// 在 plugin api 构造时注入
+api.sendMessage = async (msg) => {
+  await telegramBot.sendMessage(msg.chatId, msg.text);
+};
+```
+
+**方式 B：通过 runtime 间接注入**
+
+```typescript
+// 在 runtime 上注册，插件自行读取
+api.runtime.sendMessage = async (msg) => { ... };
+```
+
+注意：插件当前只检查 `api.sendMessage`，不检查 `runtime.sendMessage`。方式 B 需要修改插件代码。
+
+---
+
+## 事件契约
+
+### 注册的事件
+
+插件注册以下事件 handler，同时注册多种命名格式：
+
+| 事件 | 注册的名称 | handler |
+|------|-----------|---------|
+| 网关启动 | `gateway:startup`、`gateway_start` | 初始化 scheduler、执行启动恢复 |
+| 网关关闭 | `gateway:shutdown`、`gateway_shutdown`、`gateway_stop` | 停止 scheduler |
+| 收到消息 | `message:received`、`message_received` | 识别长任务、创建追踪记录 |
+| 消息已发送 | `message:sent`、`message_sent` | 确认投递成功或记录投递失败 |
+| Agent 结束 | `agent:end`、`agent_end` | 标记任务完成、触发投递 |
+
+### 事件 context 字段要求
+
+**message:received**
+
+```typescript
+context: {
+  channel: string;      // 必须为 "telegram" 才处理
+  chatId: string;       // 用于关联任务
+  threadId?: string;
+  sessionId?: string;
+  messageId?: string;   // 用于去重
+  text?: string;        // 用于文本长度检测（若启用）
+  tags?: string[];      // 用于标签识别（"long-task"/"async"/"background"）
+  asyncReturn?: boolean; // 显式标记为异步任务
+  reply?: (text: string) => Promise<void>; // 用于发送 ack
+}
+```
+
+**message:sent**
+
+```typescript
+context: {
+  channel: string;      // 必须为 "telegram" 才处理
+  taskId?: string;      // 关联已追踪任务
+  kind?: string;        // "delivery_failed" 时标记投递失败
+  error?: string;       // 错误描述
+  source?: string;      // 事件来源（若非本插件发出则跳过）
+  metadata?: Record<string, unknown>;
+}
+```
+
+**agent:end**
+
+```typescript
+context: {
+  taskId?: string;      // 关联已追踪任务
+  chatId?: string;      // 备选关联方式
+  sessionId?: string;   // 备选关联方式
+  status?: string;      // "failed"/"error" 视为失败
+  error?: string;
+  resultSummary?: string;
+  resultPayload?: unknown;
+}
+```
+
+**重要**：若 `agent:end` 的 context 中 `taskId`、`chatId`、`sessionId` 全部缺失，插件无法关联到已追踪任务，会记录 debug 日志并跳过。
+
+### context 防御性处理
+
+插件对所有 event.context 做防御性处理：
+
+- 若 `context` 为 `undefined` 或 `null`，handler 直接跳过并记录 debug 日志
+- 不会因 context 字段缺失而抛出异常
+- 所有字段按可选处理
+
+### 幂等保证
+
+若 OpenClaw 同时触发多种格式事件（如 `gateway:startup` 和 `gateway_start`），handler 会执行多次。插件通过以下机制保证幂等：
+
+- 任务状态机转换有前置状态检查
+- 去重窗口内相同 chatId + promptHash 复用任务
+- scheduler 启动有 `_running` 标志防重入
+- `inFlight` 标志防止 scheduler tick 并发
+
+---
+
+## 状态机
+
+```
+queued → running → waiting_delivery → delivering → delivered
+                        ↓                ↓
+                      failed       delivery_failed
+```
+
+### 各状态转换的触发条件
+
+| 转换 | 触发者 |
+|------|-------|
+| → `queued` | `message:received` handler 创建任务 |
+| `queued` → `running` | `message:received` handler 调用 `startTask` |
+| `running` → `waiting_delivery` | `agent:end` handler 调用 `completeTask` |
+| `running` → `failed` | `agent:end` handler，status 为 failed/error 或有 error |
+| `waiting_delivery` → `delivering` | scheduler 或手动 `resendTask` |
+| `delivering` → `delivered` | `message:sent` handler 或 scheduler 确认投递成功 |
+| `delivering` → `delivery_failed` | `message:sent` handler（kind=delivery_failed）或 deliver 返回 false |
+
+---
+
+## 健康检查
+
+### 命令
+
+```
+/async-return health
+```
+
+### 输出格式
+
+```
+enabled=<bool> store=<path> sendMessage=<ok|missing> hooks=[<fired hooks>]
+```
+
+### data 字段
+
+```json
+{
+  "ok": true,
+  "enabled": true,
+  "storePath": "...",
+  "runtimeBin": "...",
+  "sendMessageAvailable": true,
+  "hookActivity": {
+    "gatewayStart": true,
+    "gatewayStop": false,
+    "messageReceived": true,
+    "messageSent": false,
+    "agentEnd": false
+  }
+}
+```
+
+`hookActivity` 为 `null` 表示 runtime 不可用，无法追踪。
+
+---
+
+## 集成验证步骤
+
+### 1. 确认插件加载
+
+日志中出现：
+
+```
+[telegram-async-return] registering plugin
+```
+
+### 2. 确认基础能力
+
+```
+/async-return health
+→ enabled=true
+```
+
+### 3. 确认发送层
+
+```
+/async-return health
+→ sendMessage=ok     # 可用
+→ sendMessage=missing # 不可用，需适配
+```
+
+### 4. 确认事件链路
+
+发送测试消息后检查 health 输出中的 hooks 列表：
+
+- `messageReceived` 应出现 → `message:received` 或 `message_received` 已触发
+- `agentEnd` 应出现 → `agent:end` 或 `agent_end` 已触发
+- `messageSent` 应出现 → `message:sent` 或 `message_sent` 已触发
+
+若某个 hook 始终不出现，表示对应事件在当前环境中未触发或命名不匹配。
+
+### 5. 验证完整状态机
+
+发送 `asyncReturn: true` 测试消息，跟踪任务状态：
+
+```
+/async-return status --chat <test-chat-id> --latest
+```
+
+预期流转：`queued` → `running` → `waiting_delivery` → `delivering` → `delivered`
+
+若停在某个状态，参考 README 中的故障判断表。
+
+---
+
+## 故障排查
+
+| 现象 | 层级 | 原因 | 处理 |
+|------|------|------|------|
+| 插件未加载 | 注册层 | 配置未引入插件 | 检查 openclaw.config.json |
+| `sendMessage=missing` | 发送层 | 环境不提供 api.sendMessage | 适配发送层 |
+| 任务停在 `running` | agent_end 层 | agent:end 未触发或字段不匹配 | 检查 OpenClaw agent 完成事件 |
+| 任务停在 `waiting_delivery` | 发送层 | sendMessage 不可用 | 适配发送层或手动 resend |
+| 任务停在 `delivering` | hook 层 | message:sent 未触发 | 检查 OpenClaw 消息发送事件 |
+| 任务停在 `delivery_failed` | 发送层 | sendMessage 调用失败 | 检查发送接口实现 |
+| `hooks=[none]` | hook 层 | 无事件触发 | 检查事件名格式匹配 |
+| delivered 但用户未收到 | hook 层 | message_sent 语义不等于 Telegram 实际收到 | 检查 message_sent 触发时机 |
+
+---
+
+## 配置参考
+
+详细配置说明参见 [README.md](../README.md#配置说明)。
+
+关键配置项对集成的影响：
+
+| 配置项 | 默认值 | 集成影响 |
+|--------|--------|---------|
+| `asyncTextLengthThreshold` | `0` | 为 0 时仅依赖显式标记，不自动判定 |
+| `autoResendOnDeliveryFailure` | `true` | 发送层不可用时建议设为 false |
+| `recovery.scanOnStartup` | `true` | 依赖 gateway:startup hook |
+| `ackOnAsyncStart` | `true` | 依赖 message:received 的 reply 回调 |
