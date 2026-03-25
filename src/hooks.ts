@@ -15,11 +15,53 @@ import type {
 
 const SCHEDULER_KEY = Symbol.for("openclaw.telegram-async-return.scheduler");
 
+// ---------------------------------------------------------------------------
+// Hook activity tracking
+// ---------------------------------------------------------------------------
+
+const HOOK_ACTIVITY_KEY = Symbol.for("openclaw.telegram-async-return.hookActivity");
+
+interface HookActivity {
+  gatewayStart: boolean;
+  gatewayStop: boolean;
+  messageReceived: boolean;
+  messageSent: boolean;
+  agentEnd: boolean;
+}
+
+function recordHookFired(runtime: unknown, hook: keyof HookActivity) {
+  if (typeof runtime !== "object" || runtime === null) return;
+  const r = runtime as Record<symbol, unknown>;
+  let activity = r[HOOK_ACTIVITY_KEY] as HookActivity | undefined;
+  if (!activity) {
+    activity = {
+      gatewayStart: false,
+      gatewayStop: false,
+      messageReceived: false,
+      messageSent: false,
+      agentEnd: false,
+    };
+    r[HOOK_ACTIVITY_KEY] = activity;
+  }
+  activity[hook] = true;
+}
+
+export function getHookActivity(runtime: unknown): HookActivity | undefined {
+  if (typeof runtime !== "object" || runtime === null) return undefined;
+  return (runtime as Record<symbol, unknown>)[HOOK_ACTIVITY_KEY] as HookActivity | undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Handlers
+// ---------------------------------------------------------------------------
+
 export async function handleGatewayStart(context: HookContext<GatewayStartupEvent>) {
   const config = resolveTelegramAsyncReturnConfig(context.pluginConfig, context.api.resolvePath);
   if (!config.enabled) {
     return;
   }
+
+  recordHookFired(context.api.runtime, "gatewayStart");
 
   const service = createTelegramAsyncReturnService({
     pluginConfig: context.pluginConfig,
@@ -52,6 +94,8 @@ export async function handleGatewayStop(context: HookContext<GatewayShutdownEven
     return;
   }
 
+  recordHookFired(context.api.runtime, "gatewayStop");
+
   const scheduler = loadScheduler(context.api.runtime);
   if (scheduler) {
     scheduler.stop();
@@ -62,7 +106,19 @@ export async function handleGatewayStop(context: HookContext<GatewayShutdownEven
 
 export async function handleMessageReceived(context: HookContext<MessageReceivedEvent>) {
   const config = resolveTelegramAsyncReturnConfig(context.pluginConfig, context.api.resolvePath);
-  if (!config.enabled || !isTelegramEvent(context.event) || !shouldTrackAsyncTask(context.event, config)) {
+  if (!config.enabled) {
+    return;
+  }
+
+  recordHookFired(context.api.runtime, "messageReceived");
+
+  const eventContext = context.event?.context;
+  if (!eventContext) {
+    log(context, "debug", "message:received with no context — skipping");
+    return;
+  }
+
+  if (!isTelegramEvent(context.event) || !shouldTrackAsyncTask(context.event, config)) {
     return;
   }
 
@@ -73,7 +129,7 @@ export async function handleMessageReceived(context: HookContext<MessageReceived
     resolvePath: context.api.resolvePath,
   });
 
-  const { chatId, threadId, sessionId, messageId: sourceMessageId, text: prompt } = context.event.context;
+  const { chatId, threadId, sessionId, messageId: sourceMessageId, text: prompt } = eventContext;
 
   const tracked = await service.trackTask({
     chatId,
@@ -92,7 +148,7 @@ export async function handleMessageReceived(context: HookContext<MessageReceived
   }
 
   if (config.ackOnAsyncStart && !tracked.task.ackSentAt) {
-    await context.event.context.reply?.(config.ackTemplate);
+    await eventContext.reply?.(config.ackTemplate);
     await service.acknowledgeTask(tracked.task.taskId, config.ackTemplate);
   }
 
@@ -102,7 +158,19 @@ export async function handleMessageReceived(context: HookContext<MessageReceived
 
 export async function handleMessageSent(context: HookContext<MessageSentEvent>) {
   const config = resolveTelegramAsyncReturnConfig(context.pluginConfig, context.api.resolvePath);
-  if (!config.enabled || !isTelegramEvent(context.event)) {
+  if (!config.enabled) {
+    return;
+  }
+
+  recordHookFired(context.api.runtime, "messageSent");
+
+  const eventContext = context.event?.context;
+  if (!eventContext) {
+    log(context, "debug", "message:sent with no context — skipping");
+    return;
+  }
+
+  if (!isTelegramEvent(context.event)) {
     return;
   }
 
@@ -113,7 +181,7 @@ export async function handleMessageSent(context: HookContext<MessageSentEvent>) 
     resolvePath: context.api.resolvePath,
   });
 
-  const { taskId, kind, error } = context.event.context;
+  const { taskId, kind, error, source } = eventContext;
 
   if (!taskId) {
     return;
@@ -121,6 +189,12 @@ export async function handleMessageSent(context: HookContext<MessageSentEvent>) 
 
   if (kind === "delivery_failed") {
     await service.markDeliveryFailed(taskId, error ?? "Telegram delivery failed");
+    return;
+  }
+
+  // Skip events not originating from this plugin
+  if (source !== undefined && source !== "async-return" && source !== "async-return-scheduler") {
+    log(context, "debug", `message:sent task=${taskId} source="${source}" — not from async-return, skipping`);
     return;
   }
 
@@ -141,6 +215,14 @@ export async function handleAgentEnd(context: HookContext<AgentEndEvent>) {
     return;
   }
 
+  recordHookFired(context.api.runtime, "agentEnd");
+
+  const eventContext = context.event?.context;
+  if (!eventContext) {
+    log(context, "debug", "agent:end with no context — skipping");
+    return;
+  }
+
   const service = createTelegramAsyncReturnService({
     pluginConfig: context.pluginConfig,
     logger: context.api.logger,
@@ -148,7 +230,12 @@ export async function handleAgentEnd(context: HookContext<AgentEndEvent>) {
     resolvePath: context.api.resolvePath,
   });
 
-  const { taskId, chatId, sessionId, status, error, resultSummary, resultPayload } = context.event.context;
+  const { taskId, chatId, sessionId, status, error, resultSummary, resultPayload } = eventContext;
+
+  if (!taskId && !chatId && !sessionId) {
+    log(context, "debug",
+      `agent:end without taskId/chatId/sessionId — event keys: ${JSON.stringify(Object.keys(eventContext))}`);
+  }
 
   const completed = await service.completeTask({
     taskId,
@@ -181,22 +268,22 @@ export async function handleAgentEnd(context: HookContext<AgentEndEvent>) {
 // ---------------------------------------------------------------------------
 
 function isTelegramEvent(event: MessageReceivedEvent | MessageSentEvent): boolean {
-  return event.context.channel === "telegram";
+  return event?.context?.channel === "telegram";
 }
 
 function shouldTrackAsyncTask(event: MessageReceivedEvent, config: TelegramAsyncReturnPluginConfig): boolean {
-  if (event.context.asyncReturn) {
+  if (event?.context?.asyncReturn) {
+    return true;
+  }
+
+  const tags = event?.context?.tags;
+  if (Array.isArray(tags) && tags.some((tag) => ["long-task", "async", "background"].includes(tag))) {
     return true;
   }
 
   const threshold = config.asyncTextLengthThreshold;
-  if (threshold > 0 && (event.context.text ?? "").length >= threshold) {
+  if (threshold > 0 && (event?.context?.text ?? "").length >= threshold) {
     return true;
-  }
-
-  const tags = event.context.tags;
-  if (Array.isArray(tags)) {
-    return tags.some((tag) => ["long-task", "async", "background"].includes(tag));
   }
 
   return false;
@@ -227,15 +314,11 @@ function loadScheduler(runtime: unknown): DeliveryScheduler | undefined {
 function buildDeliverFn<E extends OpenClawEvent>(context: HookContext<E>) {
   let warnedMissing = false;
   return async (task: { taskId: string; chatId?: string; resultSummary?: string; resultPayload?: unknown }) => {
-    const runtime = context.api.runtime;
-    const sendMessage = runtime?.["sendTelegramMessage"] as
-      | ((msg: Record<string, unknown>) => Promise<void>)
-      | undefined;
+    const sendMessage = context.api.sendMessage;
     if (typeof sendMessage !== "function") {
       if (!warnedMissing) {
         warnedMissing = true;
-        log(context, "warn",
-          "runtime.sendTelegramMessage is not available — deliveries will fail until it is registered");
+        log(context, "warn", "api.sendMessage is not available — deliveries will fail until it is registered");
       }
       return false;
     }

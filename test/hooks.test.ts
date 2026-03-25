@@ -32,6 +32,7 @@ function makePluginConfig(dir: string) {
     storePath: join(dir, "store.db"),
     ackOnAsyncStart: true,
     ackTemplate: "Processing...",
+    asyncTextLengthThreshold: 120,
     autoResendOnDeliveryFailure: false,
     recovery: { enabled: false, scanOnStartup: false },
   };

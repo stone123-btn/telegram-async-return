@@ -16,6 +16,11 @@ declare module "openclaw/plugin-sdk" {
     runtime?: Record<string | symbol, unknown>;
     pluginConfig?: Record<string, unknown>;
     resolvePath?: (input: string) => string;
+    sendMessage?: (msg: {
+      chatId?: string;
+      text: string;
+      metadata?: Record<string, unknown>;
+    }) => Promise<void>;
     registerService(service: unknown): void;
     registerCommand(command: {
       name: string;

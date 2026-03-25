@@ -19,6 +19,12 @@ export interface RuntimeLike {
   [key: string | symbol]: unknown;
 }
 
+export type SendMessageFn = (msg: {
+  chatId?: string;
+  text: string;
+  metadata?: Record<string, unknown>;
+}) => Promise<void>;
+
 export interface TelegramAsyncReturnPluginConfig {
   enabled: boolean;
   storePath: string;
@@ -200,6 +206,8 @@ export interface MessageSentEvent extends OpenClawEvent {
     taskId?: string;
     kind?: string;
     error?: string;
+    source?: string;
+    metadata?: Record<string, unknown>;
   };
 }
 
@@ -227,6 +235,7 @@ export interface HookContext<E extends OpenClawEvent = OpenClawEvent> {
     logger?: LoggerLike;
     runtime?: RuntimeLike;
     resolvePath?: (input: string) => string;
+    sendMessage?: SendMessageFn;
   };
   event: E;
   pluginConfig?: unknown;

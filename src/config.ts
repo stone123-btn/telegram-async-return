@@ -6,7 +6,7 @@ const DEFAULT_CONFIG: TelegramAsyncReturnPluginConfig = {
   runtimeBin: "openclaw-telegram-async-return",
   ackTemplate: "已接收，任务会在后台继续处理。完成后我会自动把结果发回这里。",
   ackOnAsyncStart: true,
-  asyncTextLengthThreshold: 120,
+  asyncTextLengthThreshold: 0,
   preferExistingTaskWindowSeconds: 900,
   defaultStatusLookbackSeconds: 86400,
   autoResendOnDeliveryFailure: true,

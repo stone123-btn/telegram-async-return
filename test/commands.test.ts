@@ -100,4 +100,16 @@ describe("commands", () => {
     });
     expect(replied).toContain("enabled=true");
   });
+
+  it("health reports sendMessage availability", async () => {
+    const handler = createAsyncReturnCommandHandler({
+      pluginConfig: { storePath: join(dir, "store.db") },
+      logger: {},
+      runtime: {},
+      sendMessage: async () => {},
+      resolvePath: (p: string) => (p.startsWith("/") ? p : join(dir, p)),
+    });
+    const result = await handler({ args: ["health"] });
+    expect(result.message).toContain("sendMessage=ok");
+  });
 });

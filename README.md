@@ -38,6 +38,48 @@ queued → running → waiting_delivery → delivering → delivered
 npm install @openclaw/telegram-async-return
 ```
 
+## 兼容性
+
+- **OpenClaw 版本**：需要支持 `api.on()`、`api.registerService()`、`api.registerCommand()` 的 OpenClaw 版本
+- **核心依赖接口**：
+  - `api.on(event, handler)` — 注册事件钩子
+  - `api.registerService(service)` — 注册插件服务
+  - `api.registerCommand(command)` — 注册命令处理器
+  - `api.sendMessage(msg)` — 发送异步结果消息（可选，缺失时投递降级为失败但不崩溃）
+
+## 事件钩子
+
+插件同时注册冒号格式和下划线格式的 hook 名称，确保不同版本 OpenClaw 兼容：
+
+| 用途 | 冒号格式 | 下划线格式 |
+|------|----------|------------|
+| 网关启动 | `gateway:startup` | `gateway_start` |
+| 网关关闭 | `gateway:shutdown` | `gateway_shutdown` |
+| 收到消息 | `message:received` | `message_received` |
+| 消息已发送 | `message:sent` | `message_sent` |
+| Agent 结束 | `agent:end` | `agent_end` |
+
+> **注意**：如果 OpenClaw 同时触发两种格式事件，handler 会执行两次。插件内置去重 + 状态检查保证幂等。
+
+## 消息发送接口
+
+插件通过 `api.sendMessage()` 发送异步结果到用户。
+
+- **接口可用时**：正常投递结果
+- **接口不可用时**：记录 warn 日志，投递返回 false，任务进入 `delivery_failed` 状态，等待后续重试或手动 repair
+- 不会因接口缺失而抛出异常或导致插件崩溃
+
+## 验证安装
+
+1. `/async-return health` — 检查 `enabled`、`sendMessage`、`hooks` 状态
+2. 启动日志 — 应看到 `[telegram-async-return] registering plugin`
+3. 发送 `asyncReturn: true` 的测试消息，验证任务追踪是否正常
+
+## 钩子不可用时的处理
+
+- `message:sent` 不可用 → 任务停在 `delivering` 状态，重启后恢复或手动 `repair`
+- `agent:end` 不可用 → 任务停在 `running` 状态，需外部调用 `completeTask` 或 `repair`
+
 ## 快速开始
 
 ### 1. 注册插件
@@ -61,6 +103,7 @@ npm install @openclaw/telegram-async-return
   "storePath": ".openclaw/telegram-async-return/store.db",
   "ackOnAsyncStart": true,
   "ackTemplate": "已接收，任务会在后台继续处理。完成后我会自动把结果发回这里。",
+  "asyncTextLengthThreshold": 0, // 默认 0（禁用文本长度检测），设为正数启用（如 120）
   "autoResendOnDeliveryFailure": true,
   "resend": {
     "maxAttempts": 5,
