@@ -150,12 +150,83 @@ export interface CommandContextLike {
   reply?: (message: string) => unknown | Promise<unknown>;
 }
 
-export interface HookContext {
+// ---------------------------------------------------------------------------
+// OpenClaw event model (type:action convention)
+// ---------------------------------------------------------------------------
+
+export interface OpenClawEvent {
+  type: string;
+  action: string;
+  sessionKey?: string;
+  context?: Record<string, unknown>;
+}
+
+/** gateway:startup */
+export interface GatewayStartupEvent extends OpenClawEvent {
+  type: "gateway";
+  action: "startup";
+}
+
+/** gateway:shutdown */
+export interface GatewayShutdownEvent extends OpenClawEvent {
+  type: "gateway";
+  action: "shutdown";
+}
+
+/** message:received */
+export interface MessageReceivedEvent extends OpenClawEvent {
+  type: "message";
+  action: "received";
+  context: {
+    channel: string;
+    chatId: string;
+    threadId?: string;
+    sessionId?: string;
+    messageId?: string;
+    text?: string;
+    tags?: string[];
+    asyncReturn?: boolean;
+    reply?: (text: string) => Promise<void>;
+  };
+}
+
+/** message:sent */
+export interface MessageSentEvent extends OpenClawEvent {
+  type: "message";
+  action: "sent";
+  context: {
+    channel: string;
+    taskId?: string;
+    kind?: string;
+    error?: string;
+  };
+}
+
+/** agent:end */
+export interface AgentEndEvent extends OpenClawEvent {
+  type: "agent";
+  action: "end";
+  context: {
+    taskId?: string;
+    chatId?: string;
+    sessionId?: string;
+    status?: string;
+    error?: string;
+    resultSummary?: string;
+    resultPayload?: unknown;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Hook context (generic over event type)
+// ---------------------------------------------------------------------------
+
+export interface HookContext<E extends OpenClawEvent = OpenClawEvent> {
   api: {
     logger?: LoggerLike;
     runtime?: RuntimeLike;
     resolvePath?: (input: string) => string;
   };
-  event: unknown;
+  event: E;
   pluginConfig?: unknown;
 }
