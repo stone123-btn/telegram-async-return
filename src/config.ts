@@ -6,6 +6,7 @@ const DEFAULT_CONFIG: TelegramAsyncReturnPluginConfig = {
   runtimeBin: "openclaw-telegram-async-return",
   ackTemplate: "已接收，任务会在后台继续处理。完成后我会自动把结果发回这里。",
   ackOnAsyncStart: true,
+  asyncTextLengthThreshold: 120,
   preferExistingTaskWindowSeconds: 900,
   defaultStatusLookbackSeconds: 86400,
   autoResendOnDeliveryFailure: true,
@@ -42,6 +43,11 @@ const CONFIG_SCHEMA = {
     runtimeBin: { type: "string", default: DEFAULT_CONFIG.runtimeBin },
     ackTemplate: { type: "string", default: DEFAULT_CONFIG.ackTemplate },
     ackOnAsyncStart: { type: "boolean", default: DEFAULT_CONFIG.ackOnAsyncStart },
+    asyncTextLengthThreshold: {
+      type: "number",
+      minimum: 0,
+      default: DEFAULT_CONFIG.asyncTextLengthThreshold,
+    },
     preferExistingTaskWindowSeconds: {
       type: "number",
       minimum: 0,
@@ -160,6 +166,10 @@ export function resolveTelegramAsyncReturnConfig(
     runtimeBin: readString(input.runtimeBin, DEFAULT_CONFIG.runtimeBin),
     ackTemplate: readString(input.ackTemplate, DEFAULT_CONFIG.ackTemplate),
     ackOnAsyncStart: readBoolean(input.ackOnAsyncStart, DEFAULT_CONFIG.ackOnAsyncStart),
+    asyncTextLengthThreshold: readNumber(
+      input.asyncTextLengthThreshold,
+      DEFAULT_CONFIG.asyncTextLengthThreshold,
+    ),
     preferExistingTaskWindowSeconds: readNumber(
       input.preferExistingTaskWindowSeconds,
       DEFAULT_CONFIG.preferExistingTaskWindowSeconds,

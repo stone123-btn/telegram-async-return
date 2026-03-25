@@ -18,6 +18,7 @@ import type {
   AgentEndEvent,
   HookContext,
 } from "../src/types.js";
+import { createTelegramAsyncReturnService } from "../src/service.js";
 
 function tmpDir() {
   const dir = join(tmpdir(), `tar-hooks-test-${randomBytes(6).toString("hex")}`);
@@ -179,6 +180,29 @@ describe("hooks", () => {
       const result = await handleMessageReceived(context);
       expect(result).toBeDefined();
     });
+
+    it("uses custom asyncTextLengthThreshold to capture shorter messages", async () => {
+      const context: HookContext<MessageReceivedEvent> = {
+        api: makeApi(dir),
+        event: makeTelegramEvent({ text: "a".repeat(50) }),
+        pluginConfig: { ...makePluginConfig(dir), asyncTextLengthThreshold: 40 },
+      };
+
+      const result = await handleMessageReceived(context);
+      expect(result).toBeDefined();
+      expect(result!.task.state).toBe("queued");
+    });
+
+    it("does not track long messages when asyncTextLengthThreshold is 0", async () => {
+      const context: HookContext<MessageReceivedEvent> = {
+        api: makeApi(dir),
+        event: makeTelegramEvent({ text: "a".repeat(200) }),
+        pluginConfig: { ...makePluginConfig(dir), asyncTextLengthThreshold: 0 },
+      };
+
+      const result = await handleMessageReceived(context);
+      expect(result).toBeUndefined();
+    });
   });
 
   // -----------------------------------------------------------------------
@@ -259,6 +283,97 @@ describe("hooks", () => {
         pluginConfig: makePluginConfig(dir),
       };
       await expect(handleMessageSent(ctx)).resolves.toBeUndefined();
+    });
+
+    it("skips markDelivered when task is already delivered", async () => {
+      const api = makeApi(dir);
+      const cfg = makePluginConfig(dir);
+      const recvCtx: HookContext<MessageReceivedEvent> = {
+        api,
+        event: {
+          type: "message",
+          action: "received",
+          context: { channel: "telegram", chatId: "c1", text: "a".repeat(150) },
+        },
+        pluginConfig: cfg,
+      };
+      const tracked = await handleMessageReceived(recvCtx);
+      expect(tracked).toBeDefined();
+
+      // Complete task and mark delivered via service directly
+      const svc = createTelegramAsyncReturnService({
+        pluginConfig: cfg,
+        logger: api.logger,
+        runtime: api.runtime,
+        resolvePath: api.resolvePath,
+      });
+      await svc.completeTask({ taskId: tracked!.task.taskId, success: true });
+      await svc.resendTask(tracked!.task.taskId);
+      await svc.markDelivered(tracked!.task.taskId);
+
+      // Now send a duplicate message:sent — should be skipped
+      const sentCtx: HookContext<MessageSentEvent> = {
+        api,
+        event: {
+          type: "message",
+          action: "sent",
+          context: { channel: "telegram", taskId: tracked!.task.taskId },
+        },
+        pluginConfig: cfg,
+      };
+      await handleMessageSent(sentCtx);
+
+      const task = await svc.getStatus({ taskId: tracked!.task.taskId });
+      expect(task?.state).toBe("delivered");
+      expect(api.logger.debug).toHaveBeenCalledWith(
+        expect.stringContaining("not deliverable, skipping"),
+      );
+    });
+
+    it("skips markDelivered when task is still running", async () => {
+      const api = makeApi(dir);
+      const cfg = makePluginConfig(dir);
+      const recvCtx: HookContext<MessageReceivedEvent> = {
+        api,
+        event: {
+          type: "message",
+          action: "received",
+          context: { channel: "telegram", chatId: "c1", text: "a".repeat(150) },
+        },
+        pluginConfig: cfg,
+      };
+      const tracked = await handleMessageReceived(recvCtx);
+      expect(tracked).toBeDefined();
+
+      // Task is in running state (startTask was called during handleMessageReceived)
+      const svc = createTelegramAsyncReturnService({
+        pluginConfig: cfg,
+        logger: api.logger,
+        runtime: api.runtime,
+        resolvePath: api.resolvePath,
+      });
+      const taskBefore = await svc.getStatus({ taskId: tracked!.task.taskId });
+      // startTask is called in handleMessageReceived, so it's either queued or running
+      // The task was started so it should be running
+      expect(["queued", "running"]).toContain(taskBefore?.state);
+
+      const sentCtx: HookContext<MessageSentEvent> = {
+        api,
+        event: {
+          type: "message",
+          action: "sent",
+          context: { channel: "telegram", taskId: tracked!.task.taskId },
+        },
+        pluginConfig: cfg,
+      };
+      await handleMessageSent(sentCtx);
+
+      const taskAfter = await svc.getStatus({ taskId: tracked!.task.taskId });
+      // Should still be in the same state, not delivered
+      expect(taskAfter?.state).not.toBe("delivered");
+      expect(api.logger.debug).toHaveBeenCalledWith(
+        expect.stringContaining("not deliverable, skipping"),
+      );
     });
   });
 

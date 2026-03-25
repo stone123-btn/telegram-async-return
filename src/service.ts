@@ -40,6 +40,7 @@ export interface TelegramAsyncReturnService {
   diagnoseTask(input: TaskLookupInput): Promise<DiagnoseTaskResult>;
   repairChat(chatId: string): Promise<RepairChatResult>;
   recoverPendingTasks(): Promise<RepairChatResult>;
+  pendingDeliveryTasks(lookbackSeconds?: number): Promise<AsyncTaskRecord[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -362,6 +363,19 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
     return { repairedTaskIds, skippedTaskIds };
   }
 
+  async pendingDeliveryTasks(lookbackSeconds?: number): Promise<AsyncTaskRecord[]> {
+    const seconds = lookbackSeconds ?? this.config.defaultStatusLookbackSeconds;
+    const cutoff = new Date(Date.now() - seconds * 1000).toISOString();
+    const states: AsyncTaskState[] = ["waiting_delivery", "delivery_failed"];
+    const rows = this.db.prepare(`
+      SELECT * FROM async_tasks
+      WHERE state IN (?, ?)
+        AND updated_at >= ?
+      ORDER BY updated_at ASC
+    `).all(...states, cutoff) as TaskRow[];
+    return rows.map(rowToRecord);
+  }
+
   // ---- private: database -------------------------------------------------
 
   private openDatabase(): Database.Database {
@@ -477,8 +491,8 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
       return undefined;
     }
 
-    const cutoff = new Date(Date.now() - this.config.preferExistingTaskWindowSeconds * 1000).toISOString();
-    const reusableStates = [...ACTIVE_STATES, "delivered"];
+    const cutoff = new Date(Date.now() - this.config.dedupe.windowSeconds * 1000).toISOString();
+    const reusableStates = [...ACTIVE_STATES];
     const placeholders = reusableStates.map(() => "?").join(",");
 
     const rows = this.db.prepare(`
