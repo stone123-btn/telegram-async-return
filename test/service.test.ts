@@ -200,4 +200,72 @@ describe("service", () => {
     const status = await svc.getStatus({ taskId: task.taskId });
     expect(status?.state).toBe("waiting_delivery");
   });
+
+  it("pendingDeliveryTasks returns only waiting_delivery and delivery_failed tasks", async () => {
+    const { task: t1 } = await svc.trackTask({ chatId: "c1", prompt: "one" });
+    await svc.startTask(t1.taskId);
+    await svc.completeTask({ taskId: t1.taskId, success: true });
+    // t1 is now waiting_delivery
+
+    const { task: t2 } = await svc.trackTask({ chatId: "c1", prompt: "two" });
+    await svc.startTask(t2.taskId);
+    await svc.completeTask({ taskId: t2.taskId, success: true });
+    await svc.resendTask(t2.taskId);
+    await svc.markDeliveryFailed(t2.taskId, "err");
+    // t2 is now delivery_failed
+
+    const { task: t3 } = await svc.trackTask({ chatId: "c1", prompt: "three" });
+    await svc.startTask(t3.taskId);
+    // t3 is running
+
+    const { task: t4 } = await svc.trackTask({ chatId: "c1", prompt: "four" });
+    await svc.startTask(t4.taskId);
+    await svc.completeTask({ taskId: t4.taskId, success: true });
+    await svc.resendTask(t4.taskId);
+    await svc.markDelivered(t4.taskId);
+    // t4 is delivered
+
+    const pending = await svc.pendingDeliveryTasks();
+    const ids = pending.map((t) => t.taskId);
+    expect(ids).toContain(t1.taskId);
+    expect(ids).toContain(t2.taskId);
+    expect(ids).not.toContain(t3.taskId);
+    expect(ids).not.toContain(t4.taskId);
+  });
+
+  it("delivered tasks are not reused by dedupe", async () => {
+    const r1 = await svc.trackTask({ chatId: "c1", prompt: "same prompt" });
+    await svc.startTask(r1.task.taskId);
+    await svc.completeTask({ taskId: r1.task.taskId, success: true });
+    await svc.resendTask(r1.task.taskId);
+    await svc.markDelivered(r1.task.taskId);
+    // r1 is now delivered
+
+    const r2 = await svc.trackTask({ chatId: "c1", prompt: "same prompt" });
+    expect(r2.reused).toBe(false);
+    expect(r2.task.taskId).not.toBe(r1.task.taskId);
+  });
+
+  it("dedupe.windowSeconds expiry prevents reuse", async () => {
+    // Create service with a 1-second dedupe window
+    const shortSvc = createTelegramAsyncReturnService({
+      pluginConfig: {
+        storePath: join(dir, "store-short.db"),
+        dedupe: { windowSeconds: 1 },
+      },
+      logger: {},
+      runtime: {},
+      resolvePath: (p: string) => (p.startsWith("/") ? p : join(dir, p)),
+    });
+
+    const r1 = await shortSvc.trackTask({ chatId: "c1", prompt: "same prompt" });
+    expect(r1.reused).toBe(false);
+
+    // Wait for dedupe window to expire
+    await new Promise((r) => setTimeout(r, 1100));
+
+    const r2 = await shortSvc.trackTask({ chatId: "c1", prompt: "same prompt" });
+    expect(r2.reused).toBe(false);
+    expect(r2.task.taskId).not.toBe(r1.task.taskId);
+  });
 });

@@ -25,6 +25,7 @@ export interface TelegramAsyncReturnPluginConfig {
   runtimeBin: string;
   ackTemplate: string;
   ackOnAsyncStart: boolean;
+  asyncTextLengthThreshold: number;
   preferExistingTaskWindowSeconds: number;
   defaultStatusLookbackSeconds: number;
   autoResendOnDeliveryFailure: boolean;

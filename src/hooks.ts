@@ -8,7 +8,9 @@ import type {
   MessageReceivedEvent,
   MessageSentEvent,
   AgentEndEvent,
+  AsyncTaskState,
   OpenClawEvent,
+  TelegramAsyncReturnPluginConfig,
 } from "./types.js";
 
 const SCHEDULER_KEY = Symbol.for("openclaw.telegram-async-return.scheduler");
@@ -60,7 +62,7 @@ export async function handleGatewayStop(context: HookContext<GatewayShutdownEven
 
 export async function handleMessageReceived(context: HookContext<MessageReceivedEvent>) {
   const config = resolveTelegramAsyncReturnConfig(context.pluginConfig, context.api.resolvePath);
-  if (!config.enabled || !isTelegramEvent(context.event) || !shouldTrackAsyncTask(context.event)) {
+  if (!config.enabled || !isTelegramEvent(context.event) || !shouldTrackAsyncTask(context.event, config)) {
     return;
   }
 
@@ -122,6 +124,13 @@ export async function handleMessageSent(context: HookContext<MessageSentEvent>) 
     return;
   }
 
+  const DELIVERABLE_STATES: AsyncTaskState[] = ["waiting_delivery", "delivering", "delivery_failed"];
+  const task = await service.getStatus({ taskId });
+  if (!task || !DELIVERABLE_STATES.includes(task.state)) {
+    log(context, "debug", `message:sent task=${taskId} state=${task?.state} not deliverable, skipping`);
+    return;
+  }
+
   await service.markDelivered(taskId);
   log(context, "info", `message:sent delivered task=${taskId}`);
 }
@@ -175,13 +184,13 @@ function isTelegramEvent(event: MessageReceivedEvent | MessageSentEvent): boolea
   return event.context.channel === "telegram";
 }
 
-function shouldTrackAsyncTask(event: MessageReceivedEvent): boolean {
+function shouldTrackAsyncTask(event: MessageReceivedEvent, config: TelegramAsyncReturnPluginConfig): boolean {
   if (event.context.asyncReturn) {
     return true;
   }
 
-  const text = event.context.text ?? "";
-  if (text.length >= 120) {
+  const threshold = config.asyncTextLengthThreshold;
+  if (threshold > 0 && (event.context.text ?? "").length >= threshold) {
     return true;
   }
 
@@ -216,19 +225,25 @@ function loadScheduler(runtime: unknown): DeliveryScheduler | undefined {
 }
 
 function buildDeliverFn<E extends OpenClawEvent>(context: HookContext<E>) {
+  let warnedMissing = false;
   return async (task: { taskId: string; chatId?: string; resultSummary?: string; resultPayload?: unknown }) => {
     const runtime = context.api.runtime;
     const sendMessage = runtime?.["sendTelegramMessage"] as
       | ((msg: Record<string, unknown>) => Promise<void>)
       | undefined;
-    if (typeof sendMessage === "function") {
-      await sendMessage({
-        chatId: task.chatId,
-        text: task.resultSummary ?? JSON.stringify(task.resultPayload ?? "Task completed."),
-        metadata: { taskId: task.taskId, source: "async-return-scheduler" },
-      });
-      return true;
+    if (typeof sendMessage !== "function") {
+      if (!warnedMissing) {
+        warnedMissing = true;
+        log(context, "warn",
+          "runtime.sendTelegramMessage is not available — deliveries will fail until it is registered");
+      }
+      return false;
     }
-    return false;
+    await sendMessage({
+      chatId: task.chatId,
+      text: task.resultSummary ?? JSON.stringify(task.resultPayload ?? "Task completed."),
+      metadata: { taskId: task.taskId, source: "async-return-scheduler" },
+    });
+    return true;
   };
 }

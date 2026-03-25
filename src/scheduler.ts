@@ -64,14 +64,7 @@ export function createDeliveryScheduler(options: DeliverySchedulerOptions): Deli
     };
 
     try {
-      const pending = await service.recentTasks({
-        lookbackSeconds: config.defaultStatusLookbackSeconds,
-        limit: config.recovery.maxRecoveryTasks,
-      });
-
-      const candidates = pending.filter(
-        (t) => t.state === "waiting_delivery" || t.state === "delivery_failed",
-      );
+      const candidates = await service.pendingDeliveryTasks(config.defaultStatusLookbackSeconds);
 
       result.scanned = candidates.length;
 
@@ -97,7 +90,7 @@ export function createDeliveryScheduler(options: DeliverySchedulerOptions): Deli
           } else {
             await service.markDeliveryFailed(task.taskId, "deliver() returned false");
             result.failed.push(task.taskId);
-            log("warn", `delivery returned false for ${task.taskId}`);
+            log("warn", `delivery returned false for ${task.taskId} — runtime.sendTelegramMessage may not be registered`);
           }
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
