@@ -178,20 +178,23 @@ npm install @openclaw/telegram-async-return
 - 插件会先做 normalize，再按 `taskId → sessionId → chatId → sessionKey` 关联
 - 若宿主缺少显式字段，会降级为弱关联，准确性低于显式 `taskId`
 
-## 消息发送接口（api.sendMessage）
+## 消息发送接口
 
 **并非所有 OpenClaw 环境都提供 `api.sendMessage()`。**
 
-- 部分 OpenClaw 版本/分支提供此接口
-- 若当前环境未提供，插件仍可进行任务追踪、状态管理、诊断和 repair
-- 但异步结果自动回传不可保证，需要额外适配发送层
+插件会按以下优先级解析发送能力：
+
+1. **`api.sendMessage()`**（优先）
+2. **`api.runtime.telegram.sendMessageTelegram`**（OpenClaw runtime fallback）
+3. **无发送能力**
+
+- 若当前环境未提供任何发送接口，插件仍可进行任务追踪、状态管理、诊断和 repair
+- 但异步结果自动回传不可保证
 - 缺失发送接口时：
   - 记录 `warn` 级别日志
   - 投递返回 `false`
   - 任务进入 `waiting_delivery` 或 `delivery_failed` 状态
   - 不会抛出异常或导致插件崩溃
-
-若需在不支持 `api.sendMessage()` 的环境中实现回传，需自行实现发送适配层并注入到 `api.sendMessage`。
 
 ## 验证安装
 
@@ -214,7 +217,7 @@ npm install @openclaw/telegram-async-return
 输出示例：
 
 ```
-enabled=true store=.openclaw/telegram-async-return/store.db sendMessage=ok hooks=[gatewayStart] contracts=[inbound:unseen,agent:unseen,outbound:unseen,deliverySignal:host_send_ack] classification=explicit_only recent=0 latest=none
+enabled=true store=.openclaw/telegram-async-return/store.db sendAdapter=api.sendMessage hooks=[gatewayStart] contracts=[inbound:unseen,agent:unseen,outbound:unseen,deliverySignal:host_send_ack] classification=explicit_only recent=0 latest=none
 ```
 
 **输出字段解读**：
@@ -223,8 +226,9 @@ enabled=true store=.openclaw/telegram-async-return/store.db sendMessage=ok hooks
 |------|------|
 | `enabled=true` | 插件已启用 |
 | `store=...` | SQLite 存储路径 |
-| `sendMessage=ok` | `api.sendMessage()` 可用，自动回传有望正常工作 |
-| `sendMessage=missing` | `api.sendMessage()` 不可用，自动回传将失败，需适配发送层 |
+| `sendAdapter=api.sendMessage` | 使用 `api.sendMessage()`，自动回传有望正常工作 |
+| `sendAdapter=runtime.telegram.sendMessageTelegram` | 使用 OpenClaw runtime Telegram 发送器 |
+| `sendAdapter=none` | 无可用发送接口，自动回传将失败 |
 | `hooks=[gatewayStart,...]` | 已触发过的 hook 列表，用于判断事件链路是否畅通 |
 | `hooks=unknown` | runtime 不可用，无法追踪 hook 活动 |
 | `hooks=[none]` | 尚无任何 hook 被触发 |
@@ -260,11 +264,11 @@ queued → running → waiting_delivery → delivering → sent_confirmed
 | 现象 | 可能原因 | 排查方向 |
 |------|---------|---------|
 | 任务停在 `running` | `agent:end` / `agent_end` 未触发或字段不匹配 | 检查 OpenClaw 是否发出 agent_end 事件，检查 normalize 后是否至少能拿到 taskId/sessionId/chatId/sessionKey |
-| 任务停在 `waiting_delivery` | 发送接口不可用 | 检查 `sendMessage=ok/missing`，若 missing 需适配发送层 |
+| 任务停在 `waiting_delivery` | 发送接口不可用 | 检查 `sendAdapter` 值，若为 `none` 需配置发送层 |
 | 任务停在 `delivery_failed` | 发送接口调用失败或不可用 | 检查 warn 日志，确认发送接口实现是否正确 |
 | 任务停在 `delivering` | `message:sent` / `message_sent` 未触发 | 检查 OpenClaw 是否发出 message_sent 事件 |
 | `sent_confirmed` 但 Telegram 未收到 | `message:sent` 只表示宿主发送层确认，不等于 Telegram 终端已收到 | 检查 message_sent 事件语义是否只是提交到发送层 |
-| `sendMessage=missing` | 当前环境不提供 `api.sendMessage()` | 需实现发送适配层或使用提供该接口的 OpenClaw 版本 |
+| `sendAdapter=none` | 当前环境不提供任何发送接口 | 需配置 `api.sendMessage()` 或确保 OpenClaw runtime 提供 Telegram 发送器 |
 | `hooks=[none]` | 事件未触发或 hook 名格式不匹配 | 检查 OpenClaw 使用的事件名格式，确认插件注册的格式与之匹配 |
 | `contracts=[inbound:missing,...]` | 入站事件未被正常 normalize | 检查 message_received 的 `context/metadata` 字段 shape |
 | `contracts=[agent:weak,...]` | `agent:end` 只能弱关联 | 尽量让宿主稳定暴露 `taskId`，否则只能退化到 session/chat 级关联 |
@@ -340,12 +344,17 @@ openclaw-telegram-async-return repair --chat <chat-id>
 
 ### 发送层适配
 
-若当前环境不提供 `api.sendMessage()`：
+插件会按以下优先级解析发送能力：
+
+1. `api.sendMessage()` - 优先使用
+2. `api.runtime.telegram.sendMessageTelegram` - OpenClaw runtime fallback
+3. 无发送能力 - 仅追踪，不发送
+
+若当前环境不提供任何发送接口：
 
 1. 插件基础功能（追踪、诊断、repair）正常工作
 2. 自动回传不可用，任务会停在 `waiting_delivery` 或 `delivery_failed`
-3. 需自行实现发送适配层并注入到 `api.sendMessage`
-4. 建议 `autoResendOnDeliveryFailure` 设为 `false` 直到发送层就绪
+3. 建议 `autoResendOnDeliveryFailure` 设为 `false` 直到发送层就绪
 
 ### gateway_stop 兼容
 
@@ -354,19 +363,20 @@ openclaw-telegram-async-return repair --chat <chat-id>
 ### 生产部署检查清单
 
 1. 确认插件注册日志出现
-2. 执行 `/async-return health` 确认 `sendMessage` 状态
+2. 执行 `/async-return health` 确认 `sendAdapter` 状态
 3. 发送测试消息验证 `queued → running` 转换
 4. 若有 `agent:end`，验证 `running → waiting_delivery` 转换
-5. 若有 `api.sendMessage()`，验证 `waiting_delivery → delivering → sent_confirmed` 完整链路
+5. 若 `sendAdapter` 不为 `none`，验证 `waiting_delivery → delivering → sent_confirmed` 完整链路
 6. 若任何环节不通，记录停滞状态，对照故障判断表排查
 
 **正式生产部署前，必须完成完整状态机验证。**
 
 ## Known Issues
 
-1. **部分 OpenClaw 版本不提供 `api.sendMessage()`**
-   - 插件不会崩溃，但自动回传不可用
-   - 需自行适配发送层
+1. **部分 OpenClaw 版本不提供发送接口**
+   - 插件会尝试 `api.sendMessage()` 和 `api.runtime.telegram.sendMessageTelegram`
+   - 若都不可用，插件不会崩溃，但自动回传不可用
+   - 需配置至少一种发送接口
 
 2. **部分环境使用 `gateway_stop` 而非 `gateway_shutdown`**
    - 插件已注册 `gateway:shutdown`、`gateway_shutdown`、`gateway_stop` 三种格式

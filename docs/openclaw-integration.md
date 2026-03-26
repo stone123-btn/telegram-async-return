@@ -31,7 +31,7 @@ register(api: OpenClawPluginApi) {
 
 ---
 
-## 发送层（api.sendMessage）
+## 发送层
 
 ### 接口定义
 
@@ -45,43 +45,43 @@ sendMessage?: (msg: {
 
 ### 可用性
 
-**`api.sendMessage()` 并非所有 OpenClaw 环境都提供。**
+插件会按以下优先级解析发送能力：
 
-- 部分 OpenClaw 版本/分支提供此接口
-- 插件在注册时检测该接口是否存在，并在 health 命令中报告
-- 在 delivery 时通过 `typeof sendMessage === "function"` 动态检测
+1. **`api.sendMessage()`** - 优先使用
+2. **`api.runtime.telegram.sendMessageTelegram`** - OpenClaw runtime fallback
+3. **无发送能力** - 仅追踪，不发送
 
 ### 缺失时的行为
 
-若 `api.sendMessage()` 不存在：
+若所有发送接口都不存在：
 
 1. 插件正常注册，基础追踪功能不受影响
-2. 首次调用 delivery 时记录 `warn` 日志：`api.sendMessage is not available`
+2. 首次调用 delivery 时记录 `warn` 日志：`no supported send adapter available (adapter=none)`
 3. delivery 返回 `false`，任务标记为 `delivery_failed`
 4. scheduler 会根据配置重试，但重试同样失败
 5. 不会抛出异常或导致插件崩溃
 
 ### 适配指南
 
-若当前环境不提供 `api.sendMessage()` 但需要自动回传，有两种适配路径：
+若当前环境不提供任何发送接口但需要自动回传：
 
-**方式 A：在 OpenClaw 宿主中注入**
+**方式 A：注入 api.sendMessage**
 
 ```typescript
-// 在 plugin api 构造时注入
 api.sendMessage = async (msg) => {
   await telegramBot.sendMessage(msg.chatId, msg.text);
 };
 ```
 
-**方式 B：通过 runtime 间接注入**
+**方式 B：通过 runtime.telegram 注入**
 
 ```typescript
-// 在 runtime 上注册，插件自行读取
-api.runtime.sendMessage = async (msg) => { ... };
+api.runtime.telegram = {
+  sendMessageTelegram: async (chatId, text, metadata) => {
+    await telegramBot.sendMessage(chatId, text);
+  }
+};
 ```
-
-注意：插件当前只检查 `api.sendMessage`，不检查 `runtime.sendMessage`。方式 B 需要修改插件代码。
 
 ---
 
@@ -206,7 +206,7 @@ queued → running → waiting_delivery → delivering → sent_confirmed
 ### 输出格式
 
 ```
-enabled=<bool> store=<path> sendMessage=<ok|missing> hooks=[<fired hooks>] contracts=[inbound:<state>,agent:<state>,outbound:<state>,deliverySignal:host_send_ack] classification=<mode> recent=<n> latest=<task:state|none>
+enabled=<bool> store=<path> sendAdapter=<kind> hooks=[<fired hooks>] contracts=[inbound:<state>,agent:<state>,outbound:<state>,deliverySignal:host_send_ack] classification=<mode> recent=<n> latest=<task:state|none>
 ```
 
 ### data 字段
@@ -217,13 +217,14 @@ enabled=<bool> store=<path> sendMessage=<ok|missing> hooks=[<fired hooks>] contr
   "enabled": true,
   "storePath": "...",
   "runtimeBin": "...",
-  "sendMessageAvailable": true,
+  "sendAdapter": "api.sendMessage",
   "contractHealth": {
     "inboundNormalization": "ok",
     "agentCompletionCorrelation": "weak",
     "outboundCorrelation": "unseen",
     "classification": "explicit_only",
-    "deliverySignal": "host_send_ack"
+    "deliverySignal": "host_send_ack",
+    "sendAdapter": "api.sendMessage"
   },
   "classification": "explicit_only",
   "recentTrackedTasks": 1,
@@ -273,8 +274,9 @@ enabled=<bool> store=<path> sendMessage=<ok|missing> hooks=[<fired hooks>] contr
 
 ```
 /async-return health
-→ sendMessage=ok     # 可用
-→ sendMessage=missing # 不可用，需适配
+→ sendAdapter=api.sendMessage                        # 使用 api.sendMessage
+→ sendAdapter=runtime.telegram.sendMessageTelegram   # 使用 runtime fallback
+→ sendAdapter=none                                   # 不可用，需适配
 ```
 
 ### 4. 确认事件链路
@@ -308,11 +310,11 @@ enabled=<bool> store=<path> sendMessage=<ok|missing> hooks=[<fired hooks>] contr
 | 现象 | 层级 | 原因 | 处理 |
 |------|------|------|------|
 | 插件未加载 | 注册层 | 配置未引入插件 | 检查 openclaw.config.json |
-| `sendMessage=missing` | 发送层 | 环境不提供 api.sendMessage | 适配发送层 |
+| `sendAdapter=none` | 发送层 | 环境不提供任何发送接口 | 适配 api.sendMessage 或 runtime.telegram |
 | 任务停在 `running` | agent_end 层 | agent:end 未触发或字段不匹配 | 检查 OpenClaw agent 完成事件 |
-| 任务停在 `waiting_delivery` | 发送层 | sendMessage 不可用 | 适配发送层或手动 resend |
+| 任务停在 `waiting_delivery` | 发送层 | sendAdapter 不可用 | 适配发送层或手动 resend |
 | 任务停在 `delivering` | hook 层 | message:sent 未触发 | 检查 OpenClaw 消息发送事件 |
-| 任务停在 `delivery_failed` | 发送层 | sendMessage 调用失败 | 检查发送接口实现 |
+| 任务停在 `delivery_failed` | 发送层 | 发送接口调用失败 | 检查发送接口实现 |
 | `hooks=[none]` | hook 层 | 无事件触发 | 检查事件名格式匹配 |
 | `contracts=[inbound:missing,...]` | 入站层 | message_received shape 无法 normalize | 检查 context / metadata 字段 |
 | `contracts=[agent:weak,...]` | agent_end 层 | 只能用 session/chat 弱关联 | 尽量稳定提供 taskId |
