@@ -164,14 +164,6 @@ export interface CommandResult {
   data?: unknown;
 }
 
-export type ContractObservation = "unseen" | "ok" | "missing";
-
-export interface ContractHealth {
-  agentEndIdentifiers: ContractObservation;
-  messageSentTaskId: ContractObservation;
-  deliverySignal: "host_send_ack";
-}
-
 export interface CommandContextLike {
   args?: string | string[];
   reply?: (message: string) => unknown | Promise<unknown>;
