@@ -21,12 +21,6 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     api.logger?.info?.("[telegram-async-return] registering plugin");
 
-    const adapter = resolveSendAdapter({
-      sendMessage: api.sendMessage,
-      runtime: api.runtime,
-    });
-    api.logger?.info?.(`[telegram-async-return] send adapter: ${adapter.kind}`);
-
     const pluginConfig = api.pluginConfig ?? {};
 
     const resolvedConfig = resolveTelegramAsyncReturnConfig(pluginConfig, api.resolvePath);
@@ -36,6 +30,13 @@ const plugin = {
       );
     }
     api.logger?.info?.(`[telegram-async-return] store: ${resolvedConfig.storePath}`);
+
+    const adapter = resolveSendAdapter({
+      sendMessage: api.sendMessage,
+      runtime: api.runtime,
+      telegramBotToken: resolvedConfig.telegramBotToken,
+    });
+    api.logger?.info?.(`[telegram-async-return] send adapter: ${adapter.kind}`);
 
     api.registerService(
       createTelegramAsyncReturnService({

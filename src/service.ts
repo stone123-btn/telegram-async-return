@@ -304,6 +304,7 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
     const adapter = resolveSendAdapter({
       sendMessage: undefined,
       runtime: this.options.runtime,
+      telegramBotToken: this.config.telegramBotToken,
     });
 
     if (task.state === "running" || task.state === "queued") {

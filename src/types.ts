@@ -28,6 +28,7 @@ export type SendMessageFn = (msg: {
 export type SendAdapterKind =
   | "api.sendMessage"
   | "runtime.telegram.sendMessageTelegram"
+  | "config.telegramBotToken"
   | "none";
 
 export interface ResolvedSendAdapter {
@@ -39,6 +40,7 @@ export interface TelegramAsyncReturnPluginConfig {
   enabled: boolean;
   storePath: string;
   runtimeBin: string;
+  telegramBotToken: string;
   ackTemplate: string;
   ackOnAsyncStart: boolean;
   asyncTextLengthThreshold: number;

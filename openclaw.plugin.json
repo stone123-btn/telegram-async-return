@@ -16,6 +16,9 @@
       "runtimeBin": {
         "type": "string"
       },
+      "telegramBotToken": {
+        "type": "string"
+      },
       "ackTemplate": {
         "type": "string"
       },
@@ -144,6 +147,10 @@
       "label": "Runtime Binary",
       "help": "Optional override for the async runtime CLI path when not using the default package-installed binary.",
       "advanced": true
+    },
+    "telegramBotToken": {
+      "label": "Telegram Bot Token",
+      "help": "When the host does not provide a send adapter, the plugin will use this token to call the Telegram Bot API directly via fetch."
     },
     "ackTemplate": {
       "label": "Acknowledgement Template",
