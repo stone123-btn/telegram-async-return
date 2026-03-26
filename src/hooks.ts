@@ -2,6 +2,8 @@ import { resolveTelegramAsyncReturnConfig } from "./config.js";
 import { createTelegramAsyncReturnService } from "./service.js";
 import { createDeliveryScheduler, type DeliveryScheduler } from "./scheduler.js";
 import type {
+  ContractHealth,
+  ContractObservation,
   HookContext,
   GatewayStartupEvent,
   GatewayShutdownEvent,
@@ -20,6 +22,7 @@ const SCHEDULER_KEY = Symbol.for("openclaw.telegram-async-return.scheduler");
 // ---------------------------------------------------------------------------
 
 const HOOK_ACTIVITY_KEY = Symbol.for("openclaw.telegram-async-return.hookActivity");
+const CONTRACT_HEALTH_KEY = Symbol.for("openclaw.telegram-async-return.contractHealth");
 
 interface HookActivity {
   gatewayStart: boolean;
@@ -49,6 +52,43 @@ function recordHookFired(runtime: unknown, hook: keyof HookActivity) {
 export function getHookActivity(runtime: unknown): HookActivity | undefined {
   if (typeof runtime !== "object" || runtime === null) return undefined;
   return (runtime as Record<symbol, unknown>)[HOOK_ACTIVITY_KEY] as HookActivity | undefined;
+}
+
+function getOrCreateContractHealth(runtime: unknown): ContractHealth | undefined {
+  if (typeof runtime !== "object" || runtime === null) return undefined;
+
+  const record = runtime as Record<symbol, unknown>;
+  let health = record[CONTRACT_HEALTH_KEY] as ContractHealth | undefined;
+  if (!health) {
+    health = {
+      agentEndIdentifiers: "unseen",
+      messageSentTaskId: "unseen",
+      deliverySignal: "host_send_ack",
+    };
+    record[CONTRACT_HEALTH_KEY] = health;
+  }
+
+  return health;
+}
+
+function recordContractObservation(
+  runtime: unknown,
+  key: Exclude<keyof ContractHealth, "deliverySignal">,
+  value: ContractObservation,
+) {
+  const health = getOrCreateContractHealth(runtime);
+  if (!health) return;
+
+  if (health[key] === "ok") {
+    return;
+  }
+
+  health[key] = value;
+}
+
+export function getContractHealth(runtime: unknown): ContractHealth | undefined {
+  if (typeof runtime !== "object" || runtime === null) return undefined;
+  return getOrCreateContractHealth(runtime);
 }
 
 // ---------------------------------------------------------------------------
@@ -184,8 +224,12 @@ export async function handleMessageSent(context: HookContext<MessageSentEvent>) 
   const { taskId, kind, error, source } = eventContext;
 
   if (!taskId) {
+    recordContractObservation(context.api.runtime, "messageSentTaskId", "missing");
+    log(context, "debug", "message:sent without taskId — skipping");
     return;
   }
+
+  recordContractObservation(context.api.runtime, "messageSentTaskId", "ok");
 
   if (kind === "delivery_failed") {
     await service.markDeliveryFailed(taskId, error ?? "Telegram delivery failed");
@@ -205,8 +249,8 @@ export async function handleMessageSent(context: HookContext<MessageSentEvent>) 
     return;
   }
 
-  await service.markDelivered(taskId);
-  log(context, "info", `message:sent delivered task=${taskId}`);
+  await service.markSentConfirmed(taskId);
+  log(context, "info", `message:sent host-confirmed task=${taskId}`);
 }
 
 export async function handleAgentEnd(context: HookContext<AgentEndEvent>) {
@@ -233,9 +277,13 @@ export async function handleAgentEnd(context: HookContext<AgentEndEvent>) {
   const { taskId, chatId, sessionId, status, error, resultSummary, resultPayload } = eventContext;
 
   if (!taskId && !chatId && !sessionId) {
+    recordContractObservation(context.api.runtime, "agentEndIdentifiers", "missing");
     log(context, "debug",
       `agent:end without taskId/chatId/sessionId — event keys: ${JSON.stringify(Object.keys(eventContext))}`);
+    return;
   }
+
+  recordContractObservation(context.api.runtime, "agentEndIdentifiers", "ok");
 
   const completed = await service.completeTask({
     taskId,

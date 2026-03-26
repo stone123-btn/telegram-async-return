@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import {
+  getContractHealth,
   handleGatewayStart,
   handleGatewayStop,
   handleMessageReceived,
@@ -211,7 +212,7 @@ describe("hooks", () => {
   // -----------------------------------------------------------------------
 
   describe("handleMessageSent", () => {
-    it("marks a task as delivered", async () => {
+    it("marks a task as sent_confirmed", async () => {
       // First create a tracked task
       const recvApi = makeApi(dir);
       const cfg = makePluginConfig(dir);
@@ -227,6 +228,15 @@ describe("hooks", () => {
       const tracked = await handleMessageReceived(recvCtx);
       expect(tracked).toBeDefined();
 
+      const svc = createTelegramAsyncReturnService({
+        pluginConfig: cfg,
+        logger: recvApi.logger,
+        runtime: recvApi.runtime,
+        resolvePath: recvApi.resolvePath,
+      });
+      await svc.completeTask({ taskId: tracked!.task.taskId, success: true });
+      await svc.resendTask(tracked!.task.taskId);
+
       const sentEvent: MessageSentEvent = {
         type: "message",
         action: "sent",
@@ -238,6 +248,9 @@ describe("hooks", () => {
         pluginConfig: cfg,
       };
       await expect(handleMessageSent(sentCtx)).resolves.toBeUndefined();
+      const task = await svc.getStatus({ taskId: tracked!.task.taskId });
+      expect(task?.state).toBe("sent_confirmed");
+      expect(getContractHealth(recvApi.runtime)?.messageSentTaskId).toBe("ok");
     });
 
     it("marks delivery_failed", async () => {
@@ -273,20 +286,22 @@ describe("hooks", () => {
     });
 
     it("skips when taskId is missing", async () => {
+      const api = makeApi(dir);
       const sentEvent: MessageSentEvent = {
         type: "message",
         action: "sent",
         context: { channel: "telegram" },
       };
       const ctx: HookContext<MessageSentEvent> = {
-        api: makeApi(dir),
+        api,
         event: sentEvent,
         pluginConfig: makePluginConfig(dir),
       };
       await expect(handleMessageSent(ctx)).resolves.toBeUndefined();
+      expect(getContractHealth(api.runtime)?.messageSentTaskId).toBe("missing");
     });
 
-    it("skips markDelivered when task is already delivered", async () => {
+    it("skips markSentConfirmed when task is already sent_confirmed", async () => {
       const api = makeApi(dir);
       const cfg = makePluginConfig(dir);
       const recvCtx: HookContext<MessageReceivedEvent> = {
@@ -301,7 +316,7 @@ describe("hooks", () => {
       const tracked = await handleMessageReceived(recvCtx);
       expect(tracked).toBeDefined();
 
-      // Complete task and mark delivered via service directly
+      // Complete task and mark send-confirmed via service directly
       const svc = createTelegramAsyncReturnService({
         pluginConfig: cfg,
         logger: api.logger,
@@ -310,7 +325,7 @@ describe("hooks", () => {
       });
       await svc.completeTask({ taskId: tracked!.task.taskId, success: true });
       await svc.resendTask(tracked!.task.taskId);
-      await svc.markDelivered(tracked!.task.taskId);
+      await svc.markSentConfirmed(tracked!.task.taskId);
 
       // Now send a duplicate message:sent — should be skipped
       const sentCtx: HookContext<MessageSentEvent> = {
@@ -325,13 +340,13 @@ describe("hooks", () => {
       await handleMessageSent(sentCtx);
 
       const task = await svc.getStatus({ taskId: tracked!.task.taskId });
-      expect(task?.state).toBe("delivered");
+      expect(task?.state).toBe("sent_confirmed");
       expect(api.logger.debug).toHaveBeenCalledWith(
         expect.stringContaining("not deliverable, skipping"),
       );
     });
 
-    it("skips markDelivered when task is still running", async () => {
+    it("skips markSentConfirmed when task is still running", async () => {
       const api = makeApi(dir);
       const cfg = makePluginConfig(dir);
       const recvCtx: HookContext<MessageReceivedEvent> = {
@@ -370,8 +385,8 @@ describe("hooks", () => {
       await handleMessageSent(sentCtx);
 
       const taskAfter = await svc.getStatus({ taskId: tracked!.task.taskId });
-      // Should still be in the same state, not delivered
-      expect(taskAfter?.state).not.toBe("delivered");
+      // Should still be in the same state, not sent_confirmed
+      expect(taskAfter?.state).not.toBe("sent_confirmed");
       expect(api.logger.debug).toHaveBeenCalledWith(
         expect.stringContaining("not deliverable, skipping"),
       );
@@ -438,6 +453,44 @@ describe("hooks", () => {
 
       const result = await handleAgentEnd(ctx);
       expect(result).toBeUndefined();
+    });
+
+    it("does not complete the latest task when agent:end has no identifiers", async () => {
+      const api = makeApi(dir);
+      const cfg = makePluginConfig(dir);
+
+      const tracked = await handleMessageReceived({
+        api,
+        event: {
+          type: "message",
+          action: "received",
+          context: { channel: "telegram", chatId: "c2", text: "a".repeat(150) },
+        },
+        pluginConfig: cfg,
+      });
+      expect(tracked).toBeDefined();
+
+      const result = await handleAgentEnd({
+        api,
+        event: {
+          type: "agent",
+          action: "end",
+          context: { status: "success", resultSummary: "Done!" },
+        },
+        pluginConfig: cfg,
+      });
+
+      expect(result).toBeUndefined();
+      expect(getContractHealth(api.runtime)?.agentEndIdentifiers).toBe("missing");
+
+      const svc = createTelegramAsyncReturnService({
+        pluginConfig: cfg,
+        logger: api.logger,
+        runtime: api.runtime,
+        resolvePath: api.resolvePath,
+      });
+      const task = await svc.getStatus({ taskId: tracked!.task.taskId });
+      expect(task?.state).toBe("running");
     });
 
     it("skips when disabled", async () => {

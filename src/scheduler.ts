@@ -84,9 +84,9 @@ export function createDeliveryScheduler(options: DeliverySchedulerOptions): Deli
         try {
           const ok = await deliver(task);
           if (ok) {
-            await service.markDelivered(task.taskId);
+            await service.markSentConfirmed(task.taskId);
             result.delivered.push(task.taskId);
-            log("info", `delivered ${task.taskId}`);
+            log("info", `host-confirmed ${task.taskId}`);
           } else {
             await service.markDeliveryFailed(task.taskId, "deliver() returned false");
             result.failed.push(task.taskId);

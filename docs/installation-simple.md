@@ -94,7 +94,7 @@ openclaw plugins list
 典型输出类似：
 
 ```text
-enabled=true store=.openclaw/telegram-async-return/store.db sendMessage=ok hooks=[gatewayStart]
+enabled=true store=.openclaw/telegram-async-return/store.db sendMessage=ok hooks=[gatewayStart] contracts=[agentEndIdentifiers:unseen,messageSentTaskId:unseen,deliverySignal:host_send_ack]
 ```
 
 重点只看这几个字段：

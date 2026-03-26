@@ -50,7 +50,7 @@
 - `running`
 - `waiting_delivery`
 - `delivering`
-- `delivered`
+- `sent_confirmed`
 - `failed`
 - `delivery_failed`
 - `cancelled`
@@ -68,7 +68,7 @@
 2. 写入结果。
 3. 放入 delivery 队列。
 4. 向 Telegram 补发最终结果。
-5. 成功则标记 `delivered`，失败则进入重试。
+5. 成功则标记 `sent_confirmed`，失败则进入重试。
 
 ### 用户重复追问
 1. 查找最近相关任务。

@@ -4,6 +4,34 @@
 
 ---
 
+## 宿主责任边界
+
+插件层只负责：
+
+- 追踪 Telegram 长任务
+- 维护任务状态机
+- 提供 `/async-return` 命令、诊断、repair、resend
+- 在宿主已经提供发送能力时调用发送接口
+
+OpenClaw 宿主负责：
+
+- 暴露 `api.sendMessage()` 或等效发送桥接
+- 保证插件监听的事件实际会触发
+- 保证 `event.context` 字段满足契约
+- 决定哪些普通 Telegram 消息进入异步链路
+- 处理 CLI 是否可直接执行
+
+如果部署目标是“任务完成后自动把结果回写到 Telegram”，那么以下能力都应视为**关键平台契约**，而不是插件自己的可选增强：
+
+- `agent:end` 必须稳定提供足够的关联字段
+- `api.sendMessage()` 必须稳定可用
+- `message:sent` 的语义必须被宿主明确定义
+- 若需要独立 CLI，宿主或安装器必须显式暴露执行入口
+
+不要把“插件已安装”解释成“宿主已完成适配”。这是两个阶段。
+
+---
+
 ## 插件注册
 
 插件通过标准 OpenClaw 插件接口注册：
@@ -26,7 +54,7 @@ register(api: OpenClawPluginApi) {
 | `api.logger` | 日志输出 | 可选（缺失时静默） |
 | `api.runtime` | 运行时对象（用于存储 scheduler 实例和 hook 活动） | 可选 |
 | `api.resolvePath(input)` | 路径解析（用于 storePath） | 可选 |
-| `api.sendMessage(msg)` | 发送消息到用户 | 可选（见下方发送层说明） |
+| `api.sendMessage(msg)` | 发送消息到用户 | 基础追踪可缺失；自动回传场景必须稳定提供 |
 | `api.pluginConfig` | 插件配置对象 | 可选（缺失时使用默认配置） |
 
 ---
@@ -50,6 +78,7 @@ sendMessage?: (msg: {
 - 部分 OpenClaw 版本/分支提供此接口
 - 插件在注册时检测该接口是否存在，并在 health 命令中报告
 - 在 delivery 时通过 `typeof sendMessage === "function"` 动态检测
+- 对“异步结果自动回传”这个目标而言，它应被视为关键平台契约，而不是可选特性
 
 ### 缺失时的行为
 
@@ -82,6 +111,8 @@ api.runtime.sendMessage = async (msg) => { ... };
 ```
 
 注意：插件当前只检查 `api.sendMessage`，不检查 `runtime.sendMessage`。方式 B 需要修改插件代码。
+
+**推荐做法**：由 OpenClaw 在构造插件 API 时直接注入 `api.sendMessage()`。不要把发送适配责任交给插件在运行时猜测。
 
 ---
 
@@ -117,6 +148,12 @@ context: {
 }
 ```
 
+补充说明：
+
+- 若 `channel !== "telegram"`，插件会直接跳过
+- 若既没有 `asyncReturn`、也没有匹配 `tags`、且 `asyncTextLengthThreshold === 0`，插件会把这条消息视为普通消息并跳过
+- 因此“普通 Telegram 长文本自动异步化”必须由 OpenClaw 自己负责策略接入
+
 **message:sent**
 
 ```typescript
@@ -129,6 +166,12 @@ context: {
   metadata?: Record<string, unknown>;
 }
 ```
+
+补充说明：
+
+- 插件当前把 `message:sent` 当作发送成功确认
+- 但这个确认默认只是**宿主发送层语义**
+- 若宿主里的 `message:sent` 只表示“已提交发送队列”，那么插件里的 `sent_confirmed` 也只能理解为“发送层已确认”，不能理解为“Telegram 客户端已收到”
 
 **agent:end**
 
@@ -145,6 +188,12 @@ context: {
 ```
 
 **重要**：若 `agent:end` 的 context 中 `taskId`、`chatId`、`sessionId` 全部缺失，插件无法关联到已追踪任务，会记录 debug 日志并跳过。
+
+建议宿主至少做到：
+
+- 稳定暴露 `taskId`
+- 在无法提供 `taskId` 时，稳定暴露 `chatId` 或 `sessionId`
+- 在成功完成时提供 `resultSummary` 或 `resultPayload`
 
 ### context 防御性处理
 
@@ -168,7 +217,7 @@ context: {
 ## 状态机
 
 ```
-queued → running → waiting_delivery → delivering → delivered
+queued → running → waiting_delivery → delivering → sent_confirmed
                         ↓                ↓
                       failed       delivery_failed
 ```
@@ -182,8 +231,10 @@ queued → running → waiting_delivery → delivering → delivered
 | `running` → `waiting_delivery` | `agent:end` handler 调用 `completeTask` |
 | `running` → `failed` | `agent:end` handler，status 为 failed/error 或有 error |
 | `waiting_delivery` → `delivering` | scheduler 或手动 `resendTask` |
-| `delivering` → `delivered` | `message:sent` handler 或 scheduler 确认投递成功 |
+| `delivering` → `sent_confirmed` | `message:sent` handler 或 scheduler 确认宿主发送层成功 |
 | `delivering` → `delivery_failed` | `message:sent` handler（kind=delivery_failed）或 deliver 返回 false |
+
+`sent_confirmed` 在当前实现中的准确含义是：**插件观察到宿主发送成功事件**。它不是端到端的 Telegram 用户可见性保证。
 
 ---
 
@@ -198,7 +249,7 @@ queued → running → waiting_delivery → delivering → delivered
 ### 输出格式
 
 ```
-enabled=<bool> store=<path> sendMessage=<ok|missing> hooks=[<fired hooks>]
+enabled=<bool> store=<path> sendMessage=<ok|missing> hooks=[<fired hooks>] contracts=[agentEndIdentifiers:<status>,messageSentTaskId:<status>,deliverySignal:host_send_ack]
 ```
 
 ### data 字段
@@ -241,6 +292,8 @@ enabled=<bool> store=<path> sendMessage=<ok|missing> hooks=[<fired hooks>]
 → enabled=true
 ```
 
+这一步只表示插件层已加载，不表示自动回传链路已经打通。
+
 ### 3. 确认发送层
 
 ```
@@ -267,9 +320,17 @@ enabled=<bool> store=<path> sendMessage=<ok|missing> hooks=[<fired hooks>]
 /async-return status --chat <test-chat-id> --latest
 ```
 
-预期流转：`queued` → `running` → `waiting_delivery` → `delivering` → `delivered`
+预期流转：`queued` → `running` → `waiting_delivery` → `delivering` → `sent_confirmed`
 
 若停在某个状态，参考 README 中的故障判断表。
+
+如果你用普通 Telegram 文本做测试，则 OpenClaw 应先保证下面至少一项成立：
+
+1. 为消息注入 `asyncReturn: true`
+2. 为消息注入 `tags: ["long-task"]` / `["async"]` / `["background"]`
+3. 把 `asyncTextLengthThreshold` 调整为正数
+
+否则“没有进入异步”是符合当前契约的。
 
 ---
 
@@ -279,12 +340,13 @@ enabled=<bool> store=<path> sendMessage=<ok|missing> hooks=[<fired hooks>]
 |------|------|------|------|
 | 插件未加载 | 注册层 | 配置未引入插件 | 检查 openclaw.config.json |
 | `sendMessage=missing` | 发送层 | 环境不提供 api.sendMessage | 适配发送层 |
+| 普通长消息没有触发 ack | 分类层 | OpenClaw 未注入异步标记，且阈值为 0 | 由 OpenClaw 接入异步分类策略 |
 | 任务停在 `running` | agent_end 层 | agent:end 未触发或字段不匹配 | 检查 OpenClaw agent 完成事件 |
 | 任务停在 `waiting_delivery` | 发送层 | sendMessage 不可用 | 适配发送层或手动 resend |
 | 任务停在 `delivering` | hook 层 | message:sent 未触发 | 检查 OpenClaw 消息发送事件 |
 | 任务停在 `delivery_failed` | 发送层 | sendMessage 调用失败 | 检查发送接口实现 |
 | `hooks=[none]` | hook 层 | 无事件触发 | 检查事件名格式匹配 |
-| delivered 但用户未收到 | hook 层 | message_sent 语义不等于 Telegram 实际收到 | 检查 message_sent 触发时机 |
+| sent_confirmed 但用户未收到 | hook 层 | message_sent 语义不等于 Telegram 实际收到 | 检查 message_sent 触发时机 |
 
 ---
 
@@ -300,3 +362,16 @@ enabled=<bool> store=<path> sendMessage=<ok|missing> hooks=[<fired hooks>]
 | `autoResendOnDeliveryFailure` | `true` | 发送层不可用时建议设为 false |
 | `recovery.scanOnStartup` | `true` | 依赖 gateway:startup hook |
 | `ackOnAsyncStart` | `true` | 依赖 message:received 的 reply 回调 |
+
+---
+
+## 对 OpenClaw 的建议
+
+若希望终端用户获得“直接发 Telegram 长任务即可自动补发结果”的体验，OpenClaw 最好自己提供一个稳定的宿主适配层：
+
+1. 统一发送桥接到 `api.sendMessage()`
+2. 统一事件名与 `context` 字段
+3. 统一长任务判定策略，而不是让每个插件自己猜
+4. 把 CLI 暴露问题交给安装器/宿主处理，而不是要求用户手工找二进制
+
+这样插件文档就可以把“安装”与“宿主适配”明确分开，避免对最终用户过度承诺。

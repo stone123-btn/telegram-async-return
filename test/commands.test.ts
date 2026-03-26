@@ -37,6 +37,7 @@ describe("commands", () => {
     expect(result.ok).toBe(true);
     expect(result.action).toBe("health");
     expect(result.message).toContain("enabled=true");
+    expect(result.message).toContain("contracts=[");
   });
 
   it("recent with no tasks returns message", async () => {
