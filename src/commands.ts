@@ -1,6 +1,7 @@
 import { resolveTelegramAsyncReturnConfig } from "./config.js";
 import { createTelegramAsyncReturnService } from "./service.js";
 import { getContractHealth, getHookActivity, getClassificationMode } from "./hooks.js";
+import { resolveSendAdapter } from "./host-send.js";
 import type {
   CommandContextLike,
   CommandResult,
@@ -26,7 +27,10 @@ export function createAsyncReturnCommandHandler(options: AsyncReturnCommandHandl
     switch (command) {
       case "health": {
         const data = await service.health();
-        const sendMessageAvailable = typeof options.sendMessage === "function";
+        const adapter = resolveSendAdapter({
+          sendMessage: options.sendMessage,
+          runtime: options.runtime,
+        });
         const hookActivity = getHookActivity(options.runtime);
         const contractHealth = getContractHealth(options.runtime) ?? {
           inboundNormalization: "unseen",
@@ -34,7 +38,11 @@ export function createAsyncReturnCommandHandler(options: AsyncReturnCommandHandl
           outboundCorrelation: "unseen",
           classification: getClassificationMode(resolvedConfig),
           deliverySignal: "host_send_ack",
+          sendAdapter: adapter.kind,
         } satisfies ContractHealth;
+        if (!contractHealth.sendAdapter) {
+          contractHealth.sendAdapter = adapter.kind;
+        }
         const recentTasks = await service.recentTasks({ limit: 5 });
         const latestTask = recentTasks[0];
         const hookSummary = hookActivity
@@ -46,10 +54,10 @@ export function createAsyncReturnCommandHandler(options: AsyncReturnCommandHandl
         result = {
           ok: data.ok,
           action: "health",
-          message: `enabled=${String(data.enabled)} store=${data.storePath} sendMessage=${sendMessageAvailable ? "ok" : "missing"} ${hookSummary} ${contractSummary} classification=${classification} recent=${recentTasks.length} latest=${latestSummary}`,
+          message: `enabled=${String(data.enabled)} store=${data.storePath} sendAdapter=${adapter.kind} ${hookSummary} ${contractSummary} classification=${classification} recent=${recentTasks.length} latest=${latestSummary}`,
           data: {
             ...data,
-            sendMessageAvailable,
+            sendAdapter: adapter.kind,
             hookActivity: hookActivity ?? null,
             contractHealth,
             classification,

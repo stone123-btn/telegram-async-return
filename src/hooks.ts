@@ -1,6 +1,7 @@
 import { resolveTelegramAsyncReturnConfig } from "./config.js";
 import { createTelegramAsyncReturnService } from "./service.js";
 import { createDeliveryScheduler, type DeliveryScheduler } from "./scheduler.js";
+import { resolveSendAdapter } from "./host-send.js";
 import type {
   AsyncTaskState,
   ClassificationMode,
@@ -79,6 +80,7 @@ function ensureContractHealth(runtime: unknown, config: TelegramAsyncReturnPlugi
       outboundCorrelation: "unseen",
       classification: getClassificationMode(config),
       deliverySignal: "host_send_ack",
+      sendAdapter: undefined,
     };
     r[CONTRACT_HEALTH_KEY] = health;
   } else {
@@ -587,18 +589,27 @@ function loadScheduler(runtime: unknown): DeliveryScheduler | undefined {
 function buildDeliverFn<E>(context: HookContext<E>) {
   let warnedMissing = false;
   return async (task: { taskId: string; chatId?: string; resultSummary?: string; resultPayload?: unknown }) => {
-    const sendMessage = context.api.sendMessage;
-    if (typeof sendMessage !== "function") {
+    const adapter = resolveSendAdapter({
+      sendMessage: context.api.sendMessage,
+      runtime: context.api.runtime,
+    });
+
+    if (!adapter.send) {
       if (!warnedMissing) {
         warnedMissing = true;
-        log(context, "warn", "api.sendMessage is not available — deliveries will fail until it is registered");
+        log(context, "warn", `no supported send adapter available (adapter=${adapter.kind})`);
       }
       return false;
     }
-    await sendMessage({
+
+    await adapter.send({
       chatId: task.chatId,
       text: task.resultSummary ?? JSON.stringify(task.resultPayload ?? "Task completed."),
-      metadata: { taskId: task.taskId, source: "async-return-scheduler" },
+      metadata: {
+        taskId: task.taskId,
+        source: "telegram-async-return",
+        kind: "async_delivery",
+      },
     });
     return true;
   };

@@ -2,6 +2,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { createTelegramAsyncReturnConfigSchema } from "./config.js";
 import { createTelegramAsyncReturnService } from "./service.js";
 import { createAsyncReturnCommandHandler } from "./commands.js";
+import { resolveSendAdapter } from "./host-send.js";
 import {
   handleGatewayStart,
   handleGatewayStop,
@@ -19,6 +20,12 @@ const plugin = {
 
   register(api: OpenClawPluginApi) {
     api.logger?.info?.("[telegram-async-return] registering plugin");
+
+    const adapter = resolveSendAdapter({
+      sendMessage: api.sendMessage,
+      runtime: api.runtime,
+    });
+    api.logger?.info?.(`[telegram-async-return] send adapter: ${adapter.kind}`);
 
     const pluginConfig = api.pluginConfig ?? {};
 

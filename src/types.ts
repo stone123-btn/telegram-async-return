@@ -25,6 +25,16 @@ export type SendMessageFn = (msg: {
   metadata?: Record<string, unknown>;
 }) => Promise<void>;
 
+export type SendAdapterKind =
+  | "api.sendMessage"
+  | "runtime.telegram.sendMessageTelegram"
+  | "none";
+
+export interface ResolvedSendAdapter {
+  kind: SendAdapterKind;
+  send?: SendMessageFn;
+}
+
 export interface TelegramAsyncReturnPluginConfig {
   enabled: boolean;
   storePath: string;
@@ -178,6 +188,7 @@ export interface ContractHealth {
   outboundCorrelation: ContractObservation;
   classification: ClassificationMode;
   deliverySignal: "host_send_ack";
+  sendAdapter?: SendAdapterKind;
 }
 
 export interface RawOpenClawEvent {

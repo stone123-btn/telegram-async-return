@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import Database from "better-sqlite3";
 import { resolveTelegramAsyncReturnConfig } from "./config.js";
+import { resolveSendAdapter } from "./host-send.js";
 import type {
   AsyncTaskRecord,
   AsyncTaskState,
@@ -300,15 +301,41 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
       };
     }
 
+    const adapter = resolveSendAdapter({
+      sendMessage: undefined,
+      runtime: this.options.runtime,
+    });
+
     if (task.state === "running" || task.state === "queued") {
       return { task, recommendedAction: "wait", notes: ["Task is still in progress.", "Do not rerun yet."] };
     }
 
     if (task.state === "waiting_delivery" || task.state === "delivering") {
+      if (adapter.kind === "none") {
+        return {
+          task,
+          recommendedAction: "inspect_runtime",
+          notes: [
+            "No compatible send adapter is available.",
+            "Host exposes tracking hooks but not a delivery adapter.",
+            "Automatic async return cannot complete until send adapter is configured.",
+          ],
+        };
+      }
       return { task, recommendedAction: "resend", notes: ["Execution finished.", "Delivery is still pending or in progress."] };
     }
 
     if (task.state === "delivery_failed") {
+      if (adapter.kind === "none") {
+        return {
+          task,
+          recommendedAction: "inspect_runtime",
+          notes: [
+            "Delivery failed and no compatible send adapter is available.",
+            "Configure api.sendMessage or runtime.telegram.sendMessageTelegram to enable delivery.",
+          ],
+        };
+      }
       return { task, recommendedAction: "repair", notes: ["Execution finished but delivery failed.", "Resend or repair is appropriate."] };
     }
 
