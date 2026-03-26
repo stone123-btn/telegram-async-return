@@ -1,5 +1,5 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { createTelegramAsyncReturnConfigSchema } from "./config.js";
+import { createTelegramAsyncReturnConfigSchema, resolveTelegramAsyncReturnConfig } from "./config.js";
 import { createTelegramAsyncReturnService } from "./service.js";
 import { createAsyncReturnCommandHandler } from "./commands.js";
 import { resolveSendAdapter } from "./host-send.js";
@@ -28,6 +28,14 @@ const plugin = {
     api.logger?.info?.(`[telegram-async-return] send adapter: ${adapter.kind}`);
 
     const pluginConfig = api.pluginConfig ?? {};
+
+    const resolvedConfig = resolveTelegramAsyncReturnConfig(pluginConfig, api.resolvePath);
+    if (!api.resolvePath) {
+      api.logger?.warn?.(
+        `[telegram-async-return] host did not provide resolvePath; storePath resolved via process.cwd(): ${resolvedConfig.storePath}`,
+      );
+    }
+    api.logger?.info?.(`[telegram-async-return] store: ${resolvedConfig.storePath}`);
 
     api.registerService(
       createTelegramAsyncReturnService({

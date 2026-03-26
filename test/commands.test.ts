@@ -112,6 +112,6 @@ describe("commands", () => {
       resolvePath: (p: string) => (p.startsWith("/") ? p : join(dir, p)),
     });
     const result = await handler({ args: ["health"] });
-    expect(result.message).toContain("sendMessage=ok");
+    expect(result.message).toContain("sendAdapter=api.sendMessage");
   });
 });

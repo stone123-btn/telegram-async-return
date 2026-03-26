@@ -164,11 +164,25 @@ describe("service", () => {
     expect(diag.recommendedAction).toBe("wait");
   });
 
-  it("diagnoseTask recommends resend for waiting_delivery", async () => {
+  it("diagnoseTask recommends inspect_runtime for waiting_delivery without send adapter", async () => {
     const { task } = await svc.trackTask({ chatId: "c1" });
     await svc.startTask(task.taskId);
     await svc.completeTask({ taskId: task.taskId, success: true });
     const diag = await svc.diagnoseTask({ taskId: task.taskId });
+    expect(diag.recommendedAction).toBe("inspect_runtime");
+  });
+
+  it("diagnoseTask recommends resend for waiting_delivery with send adapter", async () => {
+    const svcWithSend = createTelegramAsyncReturnService({
+      pluginConfig: { storePath: join(dir, "store-send.db") },
+      logger: {},
+      runtime: { telegram: { sendMessageTelegram: async () => {} } },
+      resolvePath: (p: string) => (p.startsWith("/") ? p : join(dir, p)),
+    });
+    const { task } = await svcWithSend.trackTask({ chatId: "c1" });
+    await svcWithSend.startTask(task.taskId);
+    await svcWithSend.completeTask({ taskId: task.taskId, success: true });
+    const diag = await svcWithSend.diagnoseTask({ taskId: task.taskId });
     expect(diag.recommendedAction).toBe("resend");
   });
 

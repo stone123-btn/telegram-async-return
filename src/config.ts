@@ -1,3 +1,4 @@
+import { resolve, isAbsolute } from "node:path";
 import type { TelegramAsyncReturnPluginConfig } from "./types.js";
 
 const DEFAULT_CONFIG: TelegramAsyncReturnPluginConfig = {
@@ -318,5 +319,8 @@ function readStringArray(value: unknown, fallback: string[]) {
 }
 
 function resolveConfiguredPath(pathValue: string, resolvePath?: (input: string) => string) {
-  return resolvePath ? resolvePath(pathValue) : pathValue;
+  if (resolvePath) {
+    return resolvePath(pathValue);
+  }
+  return isAbsolute(pathValue) ? pathValue : resolve(pathValue);
 }
