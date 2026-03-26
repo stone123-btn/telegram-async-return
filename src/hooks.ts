@@ -587,11 +587,13 @@ function loadScheduler(runtime: unknown): DeliveryScheduler | undefined {
 }
 
 function buildDeliverFn<E>(context: HookContext<E>) {
+  const resolvedCfg = resolveTelegramAsyncReturnConfig(context.pluginConfig, context.api.resolvePath);
   let warnedMissing = false;
   return async (task: { taskId: string; chatId?: string; resultSummary?: string; resultPayload?: unknown }) => {
     const adapter = resolveSendAdapter({
       sendMessage: context.api.sendMessage,
       runtime: context.api.runtime,
+      telegramBotToken: resolvedCfg.telegramBotToken,
     });
 
     if (!adapter.send) {

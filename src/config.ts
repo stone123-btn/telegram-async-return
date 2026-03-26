@@ -5,6 +5,7 @@ const DEFAULT_CONFIG: TelegramAsyncReturnPluginConfig = {
   enabled: true,
   storePath: ".openclaw/telegram-async-return/store.db",
   runtimeBin: "openclaw-telegram-async-return",
+  telegramBotToken: "",
   ackTemplate: "已接收，任务会在后台继续处理。完成后我会自动把结果发回这里。",
   ackOnAsyncStart: true,
   asyncTextLengthThreshold: 0,
@@ -48,6 +49,7 @@ const CONFIG_SCHEMA = {
     enabled: { type: "boolean", default: DEFAULT_CONFIG.enabled },
     storePath: { type: "string", default: DEFAULT_CONFIG.storePath },
     runtimeBin: { type: "string", default: DEFAULT_CONFIG.runtimeBin },
+    telegramBotToken: { type: "string", default: DEFAULT_CONFIG.telegramBotToken },
     ackTemplate: { type: "string", default: DEFAULT_CONFIG.ackTemplate },
     ackOnAsyncStart: { type: "boolean", default: DEFAULT_CONFIG.ackOnAsyncStart },
     asyncTextLengthThreshold: {
@@ -194,6 +196,7 @@ export function resolveTelegramAsyncReturnConfig(
     enabled: readBoolean(input.enabled, DEFAULT_CONFIG.enabled),
     storePath: resolveConfiguredPath(readString(input.storePath, DEFAULT_CONFIG.storePath), resolvePath),
     runtimeBin: readString(input.runtimeBin, DEFAULT_CONFIG.runtimeBin),
+    telegramBotToken: readString(input.telegramBotToken, DEFAULT_CONFIG.telegramBotToken),
     ackTemplate: readString(input.ackTemplate, DEFAULT_CONFIG.ackTemplate),
     ackOnAsyncStart: readBoolean(input.ackOnAsyncStart, DEFAULT_CONFIG.ackOnAsyncStart),
     asyncTextLengthThreshold: readNumber(

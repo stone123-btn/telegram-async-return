@@ -30,6 +30,7 @@ export function createAsyncReturnCommandHandler(options: AsyncReturnCommandHandl
         const adapter = resolveSendAdapter({
           sendMessage: options.sendMessage,
           runtime: options.runtime,
+          telegramBotToken: resolvedConfig.telegramBotToken,
         });
         const hookActivity = getHookActivity(options.runtime);
         const contractHealth = getContractHealth(options.runtime) ?? {
