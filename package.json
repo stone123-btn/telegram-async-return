@@ -31,6 +31,13 @@
     "delivery"
   ],
   "license": "UNLICENSED",
+  "openclaw": {
+    "extensions": {
+      "plugin": "./dist/index.js",
+      "skills": ["./skills"],
+      "configSchema": "./openclaw.plugin.json"
+    }
+  },
   "dependencies": {
     "better-sqlite3": "^12.8.0"
   },
