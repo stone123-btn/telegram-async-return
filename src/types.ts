@@ -3,7 +3,7 @@ export type AsyncTaskState =
   | "running"
   | "waiting_delivery"
   | "delivering"
-  | "delivered"
+  | "sent_confirmed"
   | "failed"
   | "delivery_failed"
   | "cancelled";
@@ -150,6 +150,14 @@ export interface CommandResult {
   action: string;
   message: string;
   data?: unknown;
+}
+
+export type ContractObservation = "unseen" | "ok" | "missing";
+
+export interface ContractHealth {
+  agentEndIdentifiers: ContractObservation;
+  messageSentTaskId: ContractObservation;
+  deliverySignal: "host_send_ack";
 }
 
 export interface CommandContextLike {

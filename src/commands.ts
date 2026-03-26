@@ -1,5 +1,5 @@
 import { createTelegramAsyncReturnService } from "./service.js";
-import { getHookActivity } from "./hooks.js";
+import { getContractHealth, getHookActivity } from "./hooks.js";
 import type {
   CommandContextLike,
   CommandResult,
@@ -25,14 +25,18 @@ export function createAsyncReturnCommandHandler(options: AsyncReturnCommandHandl
         const data = await service.health();
         const sendMessageAvailable = typeof options.sendMessage === "function";
         const hookActivity = getHookActivity(options.runtime);
+        const contractHealth = getContractHealth(options.runtime);
         const hookSummary = hookActivity
           ? `hooks=[${Object.entries(hookActivity).filter(([, v]) => v).map(([k]) => k).join(",") || "none"}]`
           : "hooks=unknown";
+        const contractSummary = contractHealth
+          ? `contracts=[agentEndIdentifiers:${contractHealth.agentEndIdentifiers},messageSentTaskId:${contractHealth.messageSentTaskId},deliverySignal:${contractHealth.deliverySignal}]`
+          : "contracts=unknown";
         result = {
           ok: data.ok,
           action: "health",
-          message: `enabled=${String(data.enabled)} store=${data.storePath} sendMessage=${sendMessageAvailable ? "ok" : "missing"} ${hookSummary}`,
-          data: { ...data, sendMessageAvailable, hookActivity: hookActivity ?? null },
+          message: `enabled=${String(data.enabled)} store=${data.storePath} sendMessage=${sendMessageAvailable ? "ok" : "missing"} ${hookSummary} ${contractSummary}`,
+          data: { ...data, sendMessageAvailable, hookActivity: hookActivity ?? null, contractHealth: contractHealth ?? null },
         };
         break;
       }

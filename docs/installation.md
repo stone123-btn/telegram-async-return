@@ -163,7 +163,7 @@ openclaw plugins list
 典型输出类似：
 
 ```text
-enabled=true store=.openclaw/telegram-async-return/store.db sendMessage=ok hooks=[gatewayStart]
+enabled=true store=.openclaw/telegram-async-return/store.db sendMessage=ok hooks=[gatewayStart] contracts=[agentEndIdentifiers:unseen,messageSentTaskId:unseen,deliverySignal:host_send_ack]
 ```
 
 字段含义如下：
@@ -204,7 +204,7 @@ enabled=true store=.openclaw/telegram-async-return/store.db sendMessage=ok hooks
 如果宿主适配完整，状态通常会经历：
 
 ```text
-queued -> running -> waiting_delivery -> delivering -> delivered
+queued -> running -> waiting_delivery -> delivering -> sent_confirmed
 ```
 
 如果执行完成但没自动回传，继续查：
@@ -288,7 +288,7 @@ queued -> running -> waiting_delivery -> delivering -> delivered
 4. 执行 `/async-return health`
 5. 先发送一条显式异步测试消息
 6. 确认状态至少能走到 `running`
-7. 再确认是否能走到 `delivered`
+7. 再确认是否能走到 `sent_confirmed`
 8. 最后再测试普通 Telegram 长消息
 
 ## 常见故障判断
@@ -338,4 +338,4 @@ openclaw-telegram-async-return health
 
 - `openclaw plugins install ...` 成功：插件已安装
 - `/async-return health` 正常：插件已加载
-- 显式异步测试任务能走到 `delivered`：宿主适配已打通
+- 显式异步测试任务能走到 `sent_confirmed`：宿主适配已打通

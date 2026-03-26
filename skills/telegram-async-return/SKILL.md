@@ -103,7 +103,7 @@ Task states:
 - `running`
 - `waiting_delivery`
 - `delivering`
-- `delivered`
+- `sent_confirmed`
 - `failed`
 - `delivery_failed`
 - `cancelled`
@@ -186,8 +186,8 @@ Use when tracking data or delivery state is damaged and you need the runtime to 
 4. If status is `delivery_failed`:
    - Use `resend`.
    - Explain that execution finished but Telegram delivery failed.
-5. If status is `delivered`:
-   - Summarize that the result was already delivered.
+5. If status is `sent_confirmed`:
+   - Summarize that the host confirmed sending the result.
    - If the user still wants it again, use `resend`.
 6. If status is `failed`:
    - Explain that execution failed.
@@ -228,7 +228,7 @@ Use when tracking data or delivery state is damaged and you need the runtime to 
 
 - `上一个任务已经完成，但结果回传失败。我现在重新尝试发送。`
 
-### Already delivered
+### Already sent-confirmed
 
 - `上一个任务的结果已经发出。如果你需要，我可以重新发送一次。`
 
@@ -242,7 +242,7 @@ Use when tracking data or delivery state is damaged and you need the runtime to 
 - Do not start multiple active long-running tasks for the same chat or thread unless the user explicitly asks for a rerun.
 - Do not confuse missing delivery with failed execution.
 - Do not promise that the final result will appear in the same webhook response.
-- Do not send duplicate final replies when status already shows `delivered`.
+- Do not send duplicate final replies when status already shows `sent_confirmed`.
 - Do not hide runtime or delivery problems from the user.
 - Do not emit partial or streaming external replies if channel policy forbids them.
 - Do not clear or overwrite task history unless the operator explicitly asks for repair or cleanup.

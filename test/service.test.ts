@@ -122,13 +122,13 @@ describe("service", () => {
     expect(resent?.deliveryAttempts).toBe(1);
   });
 
-  it("markDelivered sets delivered state", async () => {
+  it("markSentConfirmed sets sent_confirmed state", async () => {
     const { task } = await svc.trackTask({ chatId: "c1" });
     await svc.startTask(task.taskId);
     await svc.completeTask({ taskId: task.taskId, success: true });
     await svc.resendTask(task.taskId);
-    const delivered = await svc.markDelivered(task.taskId);
-    expect(delivered?.state).toBe("delivered");
+    const delivered = await svc.markSentConfirmed(task.taskId);
+    expect(delivered?.state).toBe("sent_confirmed");
     expect(delivered?.deliveredAt).toBeTruthy();
   });
 
@@ -222,8 +222,8 @@ describe("service", () => {
     await svc.startTask(t4.taskId);
     await svc.completeTask({ taskId: t4.taskId, success: true });
     await svc.resendTask(t4.taskId);
-    await svc.markDelivered(t4.taskId);
-    // t4 is delivered
+    await svc.markSentConfirmed(t4.taskId);
+    // t4 is now sent_confirmed
 
     const pending = await svc.pendingDeliveryTasks();
     const ids = pending.map((t) => t.taskId);
@@ -233,17 +233,25 @@ describe("service", () => {
     expect(ids).not.toContain(t4.taskId);
   });
 
-  it("delivered tasks are not reused by dedupe", async () => {
+  it("sent_confirmed tasks are not reused by dedupe", async () => {
     const r1 = await svc.trackTask({ chatId: "c1", prompt: "same prompt" });
     await svc.startTask(r1.task.taskId);
     await svc.completeTask({ taskId: r1.task.taskId, success: true });
     await svc.resendTask(r1.task.taskId);
-    await svc.markDelivered(r1.task.taskId);
-    // r1 is now delivered
+    await svc.markSentConfirmed(r1.task.taskId);
+    // r1 is now sent_confirmed
 
     const r2 = await svc.trackTask({ chatId: "c1", prompt: "same prompt" });
     expect(r2.reused).toBe(false);
     expect(r2.task.taskId).not.toBe(r1.task.taskId);
+  });
+
+  it("completeTask with no identifiers returns undefined", async () => {
+    const done = await svc.completeTask({
+      success: true,
+      resultSummary: "done",
+    });
+    expect(done).toBeUndefined();
   });
 
   it("dedupe.windowSeconds expiry prevents reuse", async () => {

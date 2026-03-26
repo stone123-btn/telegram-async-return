@@ -53,7 +53,7 @@ describe("scheduler", () => {
     expect(delivered).toContain(task.taskId);
 
     const status = await svc.getStatus({ taskId: task.taskId });
-    expect(status?.state).toBe("delivered");
+    expect(status?.state).toBe("sent_confirmed");
   });
 
   it("runOnce marks delivery_failed when deliver returns false", async () => {

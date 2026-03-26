@@ -35,6 +35,7 @@ export interface TelegramAsyncReturnService {
   getStatus(input: TaskLookupInput): Promise<AsyncTaskRecord | undefined>;
   recentTasks(input: RecentTasksInput): Promise<AsyncTaskRecord[]>;
   resendTask(taskId: string): Promise<AsyncTaskRecord | undefined>;
+  markSentConfirmed(taskId: string): Promise<AsyncTaskRecord | undefined>;
   markDelivered(taskId: string): Promise<AsyncTaskRecord | undefined>;
   markDeliveryFailed(taskId: string, error: string): Promise<AsyncTaskRecord | undefined>;
   diagnoseTask(input: TaskLookupInput): Promise<DiagnoseTaskResult>;
@@ -168,6 +169,10 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
   }
 
   async completeTask(input: CompleteTaskInput) {
+    if (!input.taskId && !input.chatId && !input.sessionId) {
+      return undefined;
+    }
+
     const task = this.findTask(input);
     if (!task) return undefined;
 
@@ -246,20 +251,24 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
     return this.getTaskById(taskId);
   }
 
-  async markDelivered(taskId: string) {
+  async markSentConfirmed(taskId: string) {
     const task = this.getTaskById(taskId);
     if (!task) return undefined;
 
     const timestamp = this.now();
     this.db.prepare(`
       UPDATE async_tasks
-      SET state = 'delivered',
+      SET state = 'sent_confirmed',
           delivered_at = ?,
           updated_at = ?
       WHERE task_id = ?
     `).run(timestamp, timestamp, taskId);
 
     return this.getTaskById(taskId);
+  }
+
+  async markDelivered(taskId: string) {
+    return this.markSentConfirmed(taskId);
   }
 
   async markDeliveryFailed(taskId: string, error: string) {
@@ -304,7 +313,7 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
       return { task, recommendedAction: "rerun", notes: ["Execution itself failed."] };
     }
 
-    return { task, recommendedAction: "none", notes: ["Task is already delivered or cancelled."] };
+    return { task, recommendedAction: "none", notes: ["Task is already sent-confirmed or cancelled."] };
   }
 
   async repairChat(chatId: string): Promise<RepairChatResult> {
@@ -575,7 +584,7 @@ function rowToRecord(row: TaskRow): AsyncTaskRecord {
     prompt: row.prompt ?? undefined,
     promptHash: row.prompt_hash ?? undefined,
     acknowledgement: row.acknowledgement ?? undefined,
-    state: row.state as AsyncTaskRecord["state"],
+    state: normalizeTaskState(row.state),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     startedAt: row.started_at ?? undefined,
@@ -589,6 +598,14 @@ function rowToRecord(row: TaskRow): AsyncTaskRecord {
     lastError: row.last_error ?? undefined,
     metadata,
   };
+}
+
+function normalizeTaskState(state: string): AsyncTaskState {
+  if (state === "delivered") {
+    return "sent_confirmed";
+  }
+
+  return state as AsyncTaskState;
 }
 
 // ---------------------------------------------------------------------------
