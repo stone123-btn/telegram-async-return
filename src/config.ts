@@ -31,6 +31,12 @@ const DEFAULT_CONFIG: TelegramAsyncReturnPluginConfig = {
     logLifecycle: false,
     logDeliveryFailures: true,
     logRecovery: true,
+    logContractMismatch: true,
+    explainClassification: true,
+  },
+  classification: {
+    keywordTriggers: [],
+    acceptPlainLongText: false,
   },
 };
 
@@ -145,6 +151,29 @@ const CONFIG_SCHEMA = {
           type: "boolean",
           default: DEFAULT_CONFIG.diagnostics.logRecovery,
         },
+        logContractMismatch: {
+          type: "boolean",
+          default: DEFAULT_CONFIG.diagnostics.logContractMismatch,
+        },
+        explainClassification: {
+          type: "boolean",
+          default: DEFAULT_CONFIG.diagnostics.explainClassification,
+        },
+      },
+    },
+    classification: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        keywordTriggers: {
+          type: "array",
+          items: { type: "string" },
+          default: DEFAULT_CONFIG.classification.keywordTriggers,
+        },
+        acceptPlainLongText: {
+          type: "boolean",
+          default: DEFAULT_CONFIG.classification.acceptPlainLongText,
+        },
       },
     },
   },
@@ -227,6 +256,24 @@ export function resolveTelegramAsyncReturnConfig(
         readNested(input, "diagnostics", "logRecovery"),
         DEFAULT_CONFIG.diagnostics.logRecovery,
       ),
+      logContractMismatch: readBoolean(
+        readNested(input, "diagnostics", "logContractMismatch"),
+        DEFAULT_CONFIG.diagnostics.logContractMismatch,
+      ),
+      explainClassification: readBoolean(
+        readNested(input, "diagnostics", "explainClassification"),
+        DEFAULT_CONFIG.diagnostics.explainClassification,
+      ),
+    },
+    classification: {
+      keywordTriggers: readStringArray(
+        readNested(input, "classification", "keywordTriggers"),
+        DEFAULT_CONFIG.classification.keywordTriggers,
+      ),
+      acceptPlainLongText: readBoolean(
+        readNested(input, "classification", "acceptPlainLongText"),
+        DEFAULT_CONFIG.classification.acceptPlainLongText,
+      ),
     },
   };
 
@@ -260,6 +307,14 @@ function readNumber(value: unknown, fallback: number) {
 
 function readString(value: unknown, fallback: string) {
   return typeof value === "string" && value.trim() ? value : fallback;
+}
+
+function readStringArray(value: unknown, fallback: string[]) {
+  if (!Array.isArray(value)) {
+    return [...fallback];
+  }
+
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
 }
 
 function resolveConfiguredPath(pathValue: string, resolvePath?: (input: string) => string) {

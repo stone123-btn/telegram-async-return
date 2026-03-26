@@ -19,10 +19,6 @@ const SERVICE_RUNTIME_KEY = Symbol.for("openclaw.telegram-async-return.service")
 const ACTIVE_STATES: AsyncTaskState[] = ["queued", "running", "waiting_delivery", "delivering"];
 const DELIVERY_STATES: AsyncTaskState[] = ["waiting_delivery", "delivering", "delivery_failed"];
 
-// ---------------------------------------------------------------------------
-// Public service interface (unchanged from JSON version)
-// ---------------------------------------------------------------------------
-
 export interface TelegramAsyncReturnService {
   id: string;
   name: string;
@@ -38,21 +34,21 @@ export interface TelegramAsyncReturnService {
   markSentConfirmed(taskId: string): Promise<AsyncTaskRecord | undefined>;
   markDelivered(taskId: string): Promise<AsyncTaskRecord | undefined>;
   markDeliveryFailed(taskId: string, error: string): Promise<AsyncTaskRecord | undefined>;
+  findLatestDeliveringTaskByChat(chatId: string): Promise<AsyncTaskRecord | undefined>;
+  findLatestActiveTaskBySession(sessionId: string): Promise<AsyncTaskRecord | undefined>;
+  findLatestActiveTaskBySessionKey(sessionKey: string): Promise<AsyncTaskRecord | undefined>;
   diagnoseTask(input: TaskLookupInput): Promise<DiagnoseTaskResult>;
   repairChat(chatId: string): Promise<RepairChatResult>;
   recoverPendingTasks(): Promise<RepairChatResult>;
   pendingDeliveryTasks(lookbackSeconds?: number): Promise<AsyncTaskRecord[]>;
 }
 
-// ---------------------------------------------------------------------------
-// SQLite row shape
-// ---------------------------------------------------------------------------
-
 interface TaskRow {
   task_id: string;
   chat_id: string | null;
   thread_id: string | null;
   session_id: string | null;
+  session_key: string | null;
   source_message_id: string | null;
   prompt: string | null;
   prompt_hash: string | null;
@@ -72,10 +68,6 @@ interface TaskRow {
   metadata: string;
 }
 
-// ---------------------------------------------------------------------------
-// SQLite-backed implementation
-// ---------------------------------------------------------------------------
-
 class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
   id = "telegram-async-return";
   name = "Telegram Async Return";
@@ -90,8 +82,6 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
     this.db = this.openDatabase();
     this.migrate();
   }
-
-  // ---- public API --------------------------------------------------------
 
   async health() {
     return {
@@ -118,6 +108,7 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
       chatId: input.chatId,
       threadId: input.threadId,
       sessionId: input.sessionId,
+      sessionKey: input.sessionKey,
       sourceMessageId: input.sourceMessageId,
       prompt: input.prompt,
       promptHash: promptHash ?? undefined,
@@ -169,7 +160,7 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
   }
 
   async completeTask(input: CompleteTaskInput) {
-    if (!input.taskId && !input.chatId && !input.sessionId) {
+    if (!input.taskId && !input.sessionId && !input.chatId && !input.sessionKey) {
       return undefined;
     }
 
@@ -288,12 +279,24 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
     return this.getTaskById(taskId);
   }
 
+  async findLatestDeliveringTaskByChat(chatId: string) {
+    return this.findLatestByField("chat_id", chatId, DELIVERY_STATES);
+  }
+
+  async findLatestActiveTaskBySession(sessionId: string) {
+    return this.findLatestByField("session_id", sessionId, ACTIVE_STATES);
+  }
+
+  async findLatestActiveTaskBySessionKey(sessionKey: string) {
+    return this.findLatestByField("session_key", sessionKey, ACTIVE_STATES);
+  }
+
   async diagnoseTask(input: TaskLookupInput): Promise<DiagnoseTaskResult> {
     const task = this.findTask(input);
     if (!task) {
       return {
-        recommendedAction: "inspect_runtime",
-        notes: ["No tracked task matches the provided lookup."],
+        recommendedAction: "inspect_inbound_classification",
+        notes: buildMissingTaskDiagnosis(this.config),
       };
     }
 
@@ -313,7 +316,7 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
       return { task, recommendedAction: "rerun", notes: ["Execution itself failed."] };
     }
 
-    return { task, recommendedAction: "none", notes: ["Task is already sent-confirmed or cancelled."] };
+    return { task, recommendedAction: "none", notes: ["Task is already host-confirmed or cancelled."] };
   }
 
   async repairChat(chatId: string): Promise<RepairChatResult> {
@@ -327,7 +330,6 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
 
     const repairedTaskIds: string[] = [];
     const skippedTaskIds: string[] = [];
-
     const update = this.db.prepare(`
       UPDATE async_tasks
       SET state = 'waiting_delivery', updated_at = ?
@@ -335,7 +337,7 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
     `);
 
     for (const row of candidates) {
-      if (DELIVERY_STATES.includes(row.state as AsyncTaskState)) {
+      if (DELIVERY_STATES.includes(normalizeTaskState(row.state))) {
         update.run(timestamp, row.task_id, ...DELIVERY_STATES);
         repairedTaskIds.push(row.task_id);
       } else {
@@ -368,24 +370,23 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
         AND state != 'delivering'
     `).all(...ACTIVE_STATES) as { task_id: string }[];
 
-    const skippedTaskIds = skippedRows.map((r) => r.task_id);
-    return { repairedTaskIds, skippedTaskIds };
+    return {
+      repairedTaskIds,
+      skippedTaskIds: skippedRows.map((r) => r.task_id),
+    };
   }
 
   async pendingDeliveryTasks(lookbackSeconds?: number): Promise<AsyncTaskRecord[]> {
     const seconds = lookbackSeconds ?? this.config.defaultStatusLookbackSeconds;
     const cutoff = new Date(Date.now() - seconds * 1000).toISOString();
-    const states: AsyncTaskState[] = ["waiting_delivery", "delivery_failed"];
     const rows = this.db.prepare(`
       SELECT * FROM async_tasks
       WHERE state IN (?, ?)
         AND updated_at >= ?
       ORDER BY updated_at ASC
-    `).all(...states, cutoff) as TaskRow[];
+    `).all("waiting_delivery", "delivery_failed", cutoff) as TaskRow[];
     return rows.map(rowToRecord);
   }
-
-  // ---- private: database -------------------------------------------------
 
   private openDatabase(): Database.Database {
     const storePath = this.config.storePath;
@@ -404,50 +405,53 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
   private migrate() {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS async_tasks (
-        task_id                 TEXT PRIMARY KEY,
-        chat_id                 TEXT,
-        thread_id               TEXT,
-        session_id              TEXT,
-        source_message_id       TEXT,
-        prompt                  TEXT,
-        prompt_hash             TEXT,
-        acknowledgement         TEXT,
-        state                   TEXT NOT NULL DEFAULT 'queued',
-        created_at              TEXT NOT NULL,
-        updated_at              TEXT NOT NULL,
-        started_at              TEXT,
-        completed_at            TEXT,
-        delivered_at            TEXT,
+        task_id                  TEXT PRIMARY KEY,
+        chat_id                  TEXT,
+        thread_id                TEXT,
+        session_id               TEXT,
+        session_key              TEXT,
+        source_message_id        TEXT,
+        prompt                   TEXT,
+        prompt_hash              TEXT,
+        acknowledgement          TEXT,
+        state                    TEXT NOT NULL DEFAULT 'queued',
+        created_at               TEXT NOT NULL,
+        updated_at               TEXT NOT NULL,
+        started_at               TEXT,
+        completed_at             TEXT,
+        delivered_at             TEXT,
         last_delivery_attempt_at TEXT,
-        ack_sent_at             TEXT,
-        delivery_attempts       INTEGER NOT NULL DEFAULT 0,
-        result_summary          TEXT,
-        result_payload          TEXT,
-        last_error              TEXT,
-        metadata                TEXT NOT NULL DEFAULT '{}'
+        ack_sent_at              TEXT,
+        delivery_attempts        INTEGER NOT NULL DEFAULT 0,
+        result_summary           TEXT,
+        result_payload           TEXT,
+        last_error               TEXT,
+        metadata                 TEXT NOT NULL DEFAULT '{}'
       );
-      CREATE INDEX IF NOT EXISTS idx_tasks_chat_id    ON async_tasks(chat_id);
-      CREATE INDEX IF NOT EXISTS idx_tasks_state      ON async_tasks(state);
+      CREATE INDEX IF NOT EXISTS idx_tasks_chat_id ON async_tasks(chat_id);
+      CREATE INDEX IF NOT EXISTS idx_tasks_state ON async_tasks(state);
       CREATE INDEX IF NOT EXISTS idx_tasks_updated_at ON async_tasks(updated_at);
       CREATE INDEX IF NOT EXISTS idx_tasks_session_id ON async_tasks(session_id);
+      CREATE INDEX IF NOT EXISTS idx_tasks_session_key ON async_tasks(session_key);
       CREATE INDEX IF NOT EXISTS idx_tasks_prompt_hash ON async_tasks(prompt_hash);
     `);
-  }
 
-  // ---- private: CRUD helpers ---------------------------------------------
+    ensureColumn(this.db, "async_tasks", "session_key", "TEXT");
+  }
 
   private insertTask(task: AsyncTaskRecord) {
     this.db.prepare(`
       INSERT INTO async_tasks (
-        task_id, chat_id, thread_id, session_id, source_message_id,
+        task_id, chat_id, thread_id, session_id, session_key, source_message_id,
         prompt, prompt_hash, acknowledgement, state,
         created_at, updated_at, delivery_attempts, metadata
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       task.taskId,
       task.chatId ?? null,
       task.threadId ?? null,
       task.sessionId ?? null,
+      task.sessionKey ?? null,
       task.sourceMessageId ?? null,
       task.prompt ?? null,
       task.promptHash ?? null,
@@ -474,25 +478,36 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
       return this.getTaskById(input.taskId);
     }
 
-    const conditions: string[] = [];
-    const params: unknown[] = [];
+    const activeOnly = "success" in input;
+
+    if (input.sessionId) {
+      return activeOnly
+        ? this.findLatestByField("session_id", input.sessionId, ACTIVE_STATES)
+        : this.findLatestByField("session_id", input.sessionId);
+    }
 
     if (input.chatId) {
-      conditions.push("chat_id = ?");
-      params.push(input.chatId);
+      return activeOnly
+        ? this.findLatestByField("chat_id", input.chatId, ACTIVE_STATES)
+        : this.findLatestByField("chat_id", input.chatId);
     }
 
-    if ("sessionId" in input && input.sessionId) {
-      conditions.push("session_id = ?");
-      params.push(input.sessionId);
+    if (input.sessionKey) {
+      return activeOnly
+        ? this.findLatestByField("session_key", input.sessionKey, ACTIVE_STATES)
+        : this.findLatestByField("session_key", input.sessionKey);
     }
 
-    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-    const row = this.db.prepare(`
-      SELECT * FROM async_tasks ${where} ORDER BY updated_at DESC LIMIT 1
-    `).get(...params) as TaskRow | undefined;
+    if ("latest" in input && input.latest) {
+      const row = this.db.prepare(`
+        SELECT * FROM async_tasks
+        ORDER BY updated_at DESC
+        LIMIT 1
+      `).get() as TaskRow | undefined;
+      return row ? rowToRecord(row) : undefined;
+    }
 
-    return row ? rowToRecord(row) : undefined;
+    return undefined;
   }
 
   private findReusableTask(input: TrackTaskInput): AsyncTaskRecord | undefined {
@@ -501,16 +516,14 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
     }
 
     const cutoff = new Date(Date.now() - this.config.dedupe.windowSeconds * 1000).toISOString();
-    const reusableStates = [...ACTIVE_STATES];
-    const placeholders = reusableStates.map(() => "?").join(",");
-
+    const placeholders = ACTIVE_STATES.map(() => "?").join(",");
     const rows = this.db.prepare(`
       SELECT * FROM async_tasks
       WHERE chat_id = ?
         AND updated_at >= ?
         AND state IN (${placeholders})
       ORDER BY updated_at DESC
-    `).all(input.chatId, cutoff, ...reusableStates) as TaskRow[];
+    `).all(input.chatId, cutoff, ...ACTIVE_STATES) as TaskRow[];
 
     const promptHash = input.prompt && this.config.dedupe.promptHash ? this.hashPrompt(input.prompt) : undefined;
 
@@ -527,7 +540,22 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
     return undefined;
   }
 
-  // ---- private: helpers --------------------------------------------------
+  private findLatestByField(
+    column: "chat_id" | "session_id" | "session_key",
+    value: string,
+    states?: AsyncTaskState[],
+  ): AsyncTaskRecord | undefined {
+    const stateClause = states?.length ? `AND state IN (${states.map(() => "?").join(",")})` : "";
+    const row = this.db.prepare(`
+      SELECT * FROM async_tasks
+      WHERE ${column} = ?
+      ${stateClause}
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `).get(value, ...(states ?? [])) as TaskRow | undefined;
+
+    return row ? rowToRecord(row) : undefined;
+  }
 
   private createTaskId(chatId?: string) {
     const chatPart = chatId ? chatId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 12) : "task";
@@ -556,15 +584,13 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Row <-> Record mapping
-// ---------------------------------------------------------------------------
-
 function rowToRecord(row: TaskRow): AsyncTaskRecord {
   let metadata: Record<string, unknown> = {};
   try {
     metadata = JSON.parse(row.metadata) as Record<string, unknown>;
-  } catch { /* keep empty */ }
+  } catch {
+    metadata = {};
+  }
 
   let resultPayload: unknown;
   if (row.result_payload) {
@@ -580,6 +606,7 @@ function rowToRecord(row: TaskRow): AsyncTaskRecord {
     chatId: row.chat_id ?? undefined,
     threadId: row.thread_id ?? undefined,
     sessionId: row.session_id ?? undefined,
+    sessionKey: row.session_key ?? undefined,
     sourceMessageId: row.source_message_id ?? undefined,
     prompt: row.prompt ?? undefined,
     promptHash: row.prompt_hash ?? undefined,
@@ -600,18 +627,6 @@ function rowToRecord(row: TaskRow): AsyncTaskRecord {
   };
 }
 
-function normalizeTaskState(state: string): AsyncTaskState {
-  if (state === "delivered") {
-    return "sent_confirmed";
-  }
-
-  return state as AsyncTaskState;
-}
-
-// ---------------------------------------------------------------------------
-// Factory (singleton per runtime, same as before)
-// ---------------------------------------------------------------------------
-
 export function createTelegramAsyncReturnService(
   options: CreateTelegramAsyncReturnServiceOptions,
 ): TelegramAsyncReturnService {
@@ -629,9 +644,39 @@ export function createTelegramAsyncReturnService(
   return service;
 }
 
-// ---------------------------------------------------------------------------
-// Utility
-// ---------------------------------------------------------------------------
+function ensureColumn(db: Database.Database, table: string, column: string, definition: string) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (columns.some((entry) => entry.name === column)) {
+    return;
+  }
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+function normalizeTaskState(state: string): AsyncTaskState {
+  if (state === "delivered") {
+    return "sent_confirmed";
+  }
+  return state as AsyncTaskState;
+}
+
+function buildMissingTaskDiagnosis(config: TelegramAsyncReturnPluginConfig): string[] {
+  const notes = [
+    "No recent tracked task found.",
+    "Inbound message may not have been normalized or classified as async.",
+  ];
+
+  if (config.asyncTextLengthThreshold === 0) {
+    notes.push("asyncTextLengthThreshold=0 means plain Telegram text will not auto-enter async flow without asyncReturn or async tags.");
+  } else {
+    notes.push(`Current asyncTextLengthThreshold=${config.asyncTextLengthThreshold}.`);
+  }
+
+  if (config.classification.keywordTriggers.length > 0) {
+    notes.push(`keywordTriggers=${config.classification.keywordTriggers.join(",")}`);
+  }
+
+  return notes;
+}
 
 function getParentDirectory(pathValue: string) {
   const normalized = pathValue.replace(/\\/g, "/");
