@@ -180,6 +180,12 @@ describe("service", () => {
     expect(diag.recommendedAction).toBe("rerun");
   });
 
+  it("diagnoseTask recommends inspect_inbound_classification when no task exists", async () => {
+    const diag = await svc.diagnoseTask({ chatId: "missing-chat" });
+    expect(diag.recommendedAction).toBe("inspect_inbound_classification");
+    expect(diag.notes[0]).toContain("No recent tracked task");
+  });
+
   it("repairChat resets delivery states to waiting_delivery", async () => {
     const { task } = await svc.trackTask({ chatId: "c1" });
     await svc.startTask(task.taskId);
@@ -223,7 +229,7 @@ describe("service", () => {
     await svc.completeTask({ taskId: t4.taskId, success: true });
     await svc.resendTask(t4.taskId);
     await svc.markSentConfirmed(t4.taskId);
-    // t4 is now sent_confirmed
+    // t4 is sent_confirmed
 
     const pending = await svc.pendingDeliveryTasks();
     const ids = pending.map((t) => t.taskId);
@@ -244,14 +250,6 @@ describe("service", () => {
     const r2 = await svc.trackTask({ chatId: "c1", prompt: "same prompt" });
     expect(r2.reused).toBe(false);
     expect(r2.task.taskId).not.toBe(r1.task.taskId);
-  });
-
-  it("completeTask with no identifiers returns undefined", async () => {
-    const done = await svc.completeTask({
-      success: true,
-      resultSummary: "done",
-    });
-    expect(done).toBeUndefined();
   });
 
   it("dedupe.windowSeconds expiry prevents reuse", async () => {
@@ -275,5 +273,31 @@ describe("service", () => {
     const r2 = await shortSvc.trackTask({ chatId: "c1", prompt: "same prompt" });
     expect(r2.reused).toBe(false);
     expect(r2.task.taskId).not.toBe(r1.task.taskId);
+  });
+
+  it("completeTask with no identifiers returns undefined", async () => {
+    const done = await svc.completeTask({ success: true, resultSummary: "noop" });
+    expect(done).toBeUndefined();
+  });
+
+  it("findLatestActiveTaskBySession returns newest active task", async () => {
+    const first = await svc.trackTask({ chatId: "c1", sessionId: "s1", prompt: "first" });
+    await svc.startTask(first.task.taskId);
+    await new Promise((r) => setTimeout(r, 15));
+    const second = await svc.trackTask({ chatId: "c1", sessionId: "s1", prompt: "second" });
+    await svc.startTask(second.task.taskId);
+
+    const found = await svc.findLatestActiveTaskBySession("s1");
+    expect(found?.taskId).toBe(second.task.taskId);
+  });
+
+  it("findLatestDeliveringTaskByChat returns newest deliverable task", async () => {
+    const tracked = await svc.trackTask({ chatId: "c9", prompt: "deliver me" });
+    await svc.startTask(tracked.task.taskId);
+    await svc.completeTask({ taskId: tracked.task.taskId, success: true });
+
+    const found = await svc.findLatestDeliveringTaskByChat("c9");
+    expect(found?.taskId).toBe(tracked.task.taskId);
+    expect(found?.state).toBe("waiting_delivery");
   });
 });

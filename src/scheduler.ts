@@ -23,7 +23,7 @@ export interface DeliveryScheduler {
 
 export interface DeliveryRunResult {
   scanned: number;
-  delivered: string[];
+  sentConfirmed: string[];
   failed: string[];
   skipped: string[];
 }
@@ -52,13 +52,13 @@ export function createDeliveryScheduler(options: DeliverySchedulerOptions): Deli
 
   async function runOnce(): Promise<DeliveryRunResult> {
     if (inFlight) {
-      return { scanned: 0, delivered: [], failed: [], skipped: [] };
+      return { scanned: 0, sentConfirmed: [], failed: [], skipped: [] };
     }
 
     inFlight = true;
     const result: DeliveryRunResult = {
       scanned: 0,
-      delivered: [],
+      sentConfirmed: [],
       failed: [],
       skipped: [],
     };
@@ -85,7 +85,7 @@ export function createDeliveryScheduler(options: DeliverySchedulerOptions): Deli
           const ok = await deliver(task);
           if (ok) {
             await service.markSentConfirmed(task.taskId);
-            result.delivered.push(task.taskId);
+            result.sentConfirmed.push(task.taskId);
             log("info", `host-confirmed ${task.taskId}`);
           } else {
             await service.markDeliveryFailed(task.taskId, "deliver() returned false");

@@ -49,7 +49,7 @@ describe("scheduler", () => {
 
     const result = await scheduler.runOnce();
     expect(result.scanned).toBe(1);
-    expect(result.delivered).toContain(task.taskId);
+    expect(result.sentConfirmed).toContain(task.taskId);
     expect(delivered).toContain(task.taskId);
 
     const status = await svc.getStatus({ taskId: task.taskId });
@@ -154,6 +154,6 @@ describe("scheduler", () => {
     });
 
     const result = await scheduler.runOnce();
-    expect(result.delivered).toContain(task.taskId);
+    expect(result.sentConfirmed).toContain(task.taskId);
   });
 });

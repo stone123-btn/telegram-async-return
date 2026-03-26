@@ -1,8 +1,10 @@
+import { resolveTelegramAsyncReturnConfig } from "./config.js";
 import { createTelegramAsyncReturnService } from "./service.js";
-import { getContractHealth, getHookActivity } from "./hooks.js";
+import { getContractHealth, getHookActivity, getClassificationMode } from "./hooks.js";
 import type {
   CommandContextLike,
   CommandResult,
+  ContractHealth,
   CreateTelegramAsyncReturnServiceOptions,
   SendMessageFn,
 } from "./types.js";
@@ -17,6 +19,7 @@ export function createAsyncReturnCommandHandler(options: AsyncReturnCommandHandl
   return async function handleAsyncReturnCommand(context: CommandContextLike = {}): Promise<CommandResult> {
     const argv = parseArgs(context.args);
     const command = argv[0] ?? "help";
+    const resolvedConfig = resolveTelegramAsyncReturnConfig(options.pluginConfig, options.resolvePath);
 
     let result: CommandResult;
 
@@ -25,18 +28,34 @@ export function createAsyncReturnCommandHandler(options: AsyncReturnCommandHandl
         const data = await service.health();
         const sendMessageAvailable = typeof options.sendMessage === "function";
         const hookActivity = getHookActivity(options.runtime);
-        const contractHealth = getContractHealth(options.runtime);
+        const contractHealth = getContractHealth(options.runtime) ?? {
+          inboundNormalization: "unseen",
+          agentCompletionCorrelation: "unseen",
+          outboundCorrelation: "unseen",
+          classification: getClassificationMode(resolvedConfig),
+          deliverySignal: "host_send_ack",
+        } satisfies ContractHealth;
+        const recentTasks = await service.recentTasks({ limit: 5 });
+        const latestTask = recentTasks[0];
         const hookSummary = hookActivity
           ? `hooks=[${Object.entries(hookActivity).filter(([, v]) => v).map(([k]) => k).join(",") || "none"}]`
           : "hooks=unknown";
-        const contractSummary = contractHealth
-          ? `contracts=[agentEndIdentifiers:${contractHealth.agentEndIdentifiers},messageSentTaskId:${contractHealth.messageSentTaskId},deliverySignal:${contractHealth.deliverySignal}]`
-          : "contracts=unknown";
+        const contractSummary = `contracts=[inbound:${contractHealth.inboundNormalization},agent:${contractHealth.agentCompletionCorrelation},outbound:${contractHealth.outboundCorrelation},deliverySignal:${contractHealth.deliverySignal}]`;
+        const classification = contractHealth.classification ?? getClassificationMode(resolvedConfig);
+        const latestSummary = latestTask ? `${latestTask.taskId}:${latestTask.state}` : "none";
         result = {
           ok: data.ok,
           action: "health",
-          message: `enabled=${String(data.enabled)} store=${data.storePath} sendMessage=${sendMessageAvailable ? "ok" : "missing"} ${hookSummary} ${contractSummary}`,
-          data: { ...data, sendMessageAvailable, hookActivity: hookActivity ?? null, contractHealth: contractHealth ?? null },
+          message: `enabled=${String(data.enabled)} store=${data.storePath} sendMessage=${sendMessageAvailable ? "ok" : "missing"} ${hookSummary} ${contractSummary} classification=${classification} recent=${recentTasks.length} latest=${latestSummary}`,
+          data: {
+            ...data,
+            sendMessageAvailable,
+            hookActivity: hookActivity ?? null,
+            contractHealth,
+            classification,
+            recentTrackedTasks: recentTasks.length,
+            latestTask: latestTask ?? null,
+          },
         };
         break;
       }

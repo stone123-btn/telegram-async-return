@@ -22,6 +22,10 @@
       "ackOnAsyncStart": {
         "type": "boolean"
       },
+      "asyncTextLengthThreshold": {
+        "type": "number",
+        "minimum": 0
+      },
       "preferExistingTaskWindowSeconds": {
         "type": "number",
         "minimum": 0
@@ -101,6 +105,27 @@
           },
           "logRecovery": {
             "type": "boolean"
+          },
+          "logContractMismatch": {
+            "type": "boolean"
+          },
+          "explainClassification": {
+            "type": "boolean"
+          }
+        }
+      },
+      "classification": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "keywordTriggers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "acceptPlainLongText": {
+            "type": "boolean"
           }
         }
       }
@@ -128,6 +153,10 @@
       "label": "Send Background Ack",
       "help": "Send an immediate Telegram acknowledgement when a task switches into async-return mode."
     },
+    "asyncTextLengthThreshold": {
+      "label": "Async Text Length Threshold",
+      "help": "When greater than 0, plain Telegram text at or above this length may be classified into async flow. Default 0 means plain messages are not auto-tracked."
+    },
     "preferExistingTaskWindowSeconds": {
       "label": "Reuse Existing Task Window",
       "help": "Time window for preferring an existing in-flight or recently completed task instead of starting a duplicate."
@@ -146,7 +175,7 @@
     },
     "recovery": {
       "label": "Recovery Policy",
-      "help": "Startup reconciliation and recovery settings for unfinished or undelivered tasks."
+      "help": "Startup reconciliation and recovery settings for unfinished or not yet host-confirmed tasks."
     },
     "dedupe": {
       "label": "Duplicate Detection",
@@ -154,7 +183,12 @@
     },
     "diagnostics": {
       "label": "Diagnostics",
-      "help": "Enable extra lifecycle, delivery, and recovery logs for troubleshooting.",
+      "help": "Enable extra lifecycle, contract-mismatch, delivery, and recovery logs for troubleshooting.",
+      "advanced": true
+    },
+    "classification": {
+      "label": "Classification",
+      "help": "Controls fallback async classification such as keyword triggers and plain-text acceptance.",
       "advanced": true
     }
   }

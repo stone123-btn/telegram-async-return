@@ -38,6 +38,7 @@ describe("commands", () => {
     expect(result.action).toBe("health");
     expect(result.message).toContain("enabled=true");
     expect(result.message).toContain("contracts=[");
+    expect(result.message).toContain("classification=");
   });
 
   it("recent with no tasks returns message", async () => {
@@ -77,12 +78,12 @@ describe("commands", () => {
     expect(result.message).toContain("resend");
   });
 
-  it("diagnose with no tasks returns inspect_runtime", async () => {
+  it("diagnose with no tasks returns inspect_inbound_classification", async () => {
     const handler = makeHandler(dir);
     const result = await handler({ args: ["diagnose", "--chat", "c1"] });
     expect(result.ok).toBe(true);
     expect(result.action).toBe("diagnose");
-    expect(result.message).toContain("inspect_runtime");
+    expect(result.message).toContain("inspect_inbound_classification");
   });
 
   it("parses string args correctly", async () => {
