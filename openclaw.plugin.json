@@ -2,7 +2,7 @@
   "id": "telegram-async-return",
   "name": "Telegram Async Return",
   "description": "Reliable async result tracking, resend, and recovery for Telegram tasks that outlive the webhook response window.",
-  "skills": ["./skills"],
+  "skills": ["./dist/skills"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

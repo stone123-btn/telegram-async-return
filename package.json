@@ -18,7 +18,7 @@
     "skills"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && cp -r skills dist/skills",
     "check": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest"
