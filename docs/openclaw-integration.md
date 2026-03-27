@@ -49,7 +49,8 @@ sendMessage?: (msg: {
 
 1. **`api.sendMessage()`** - 优先使用
 2. **`api.runtime.telegram.sendMessageTelegram`** - OpenClaw runtime fallback
-3. **无发送能力** - 仅追踪，不发送
+3. **`config.telegramBotToken`** 或环境变量 **`TELEGRAM_BOT_TOKEN`** - 插件自带，通过 fetch 直调 Telegram Bot API
+4. **无发送能力** - 仅追踪，不发送
 
 ### 缺失时的行为
 
@@ -65,7 +66,23 @@ sendMessage?: (msg: {
 
 若当前环境不提供任何发送接口但需要自动回传：
 
-**方式 A：注入 api.sendMessage**
+**方式 A（最简单）：设置环境变量**
+
+```bash
+export TELEGRAM_BOT_TOKEN="123456:ABC-DEF..."
+```
+
+或在插件配置中：
+
+```jsonc
+{
+  "telegramBotToken": "123456:ABC-DEF..."
+}
+```
+
+插件会通过 `fetch` 直接调用 `https://api.telegram.org/bot<token>/sendMessage`。
+
+**方式 B：注入 api.sendMessage**
 
 ```typescript
 api.sendMessage = async (msg) => {
@@ -73,7 +90,7 @@ api.sendMessage = async (msg) => {
 };
 ```
 
-**方式 B：通过 runtime.telegram 注入**
+**方式 C：通过 runtime.telegram 注入**
 
 ```typescript
 api.runtime.telegram = {
@@ -276,6 +293,7 @@ enabled=<bool> store=<path> sendAdapter=<kind> hooks=[<fired hooks>] contracts=[
 /async-return health
 → sendAdapter=api.sendMessage                        # 使用 api.sendMessage
 → sendAdapter=runtime.telegram.sendMessageTelegram   # 使用 runtime fallback
+→ sendAdapter=config.telegramBotToken                # 使用 bot token 直调 Telegram API
 → sendAdapter=none                                   # 不可用，需适配
 ```
 
@@ -310,7 +328,7 @@ enabled=<bool> store=<path> sendAdapter=<kind> hooks=[<fired hooks>] contracts=[
 | 现象 | 层级 | 原因 | 处理 |
 |------|------|------|------|
 | 插件未加载 | 注册层 | 配置未引入插件 | 检查 openclaw.config.json |
-| `sendAdapter=none` | 发送层 | 环境不提供任何发送接口 | 适配 api.sendMessage 或 runtime.telegram |
+| `sendAdapter=none` | 发送层 | 环境不提供任何发送接口且未配置 bot token | 设置环境变量 `TELEGRAM_BOT_TOKEN` 或配置 `telegramBotToken` |
 | 任务停在 `running` | agent_end 层 | agent:end 未触发或字段不匹配 | 检查 OpenClaw agent 完成事件 |
 | 任务停在 `waiting_delivery` | 发送层 | sendAdapter 不可用 | 适配发送层或手动 resend |
 | 任务停在 `delivering` | hook 层 | message:sent 未触发 | 检查 OpenClaw 消息发送事件 |

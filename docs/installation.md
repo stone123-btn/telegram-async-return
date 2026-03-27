@@ -175,7 +175,7 @@ enabled=true store=.openclaw/telegram-async-return/store.db sendMessage=ok hooks
 - `sendMessage=ok`
   宿主已提供发送接口，自动回传更有可能正常工作
 - `sendMessage=missing`
-  宿主没有提供发送接口，插件可以追踪任务，但自动回传不能保证
+  宿主没有提供发送接口且未配置 bot token，插件可以追踪任务，但自动回传不能保证。可设置环境变量 `TELEGRAM_BOT_TOKEN` 快速解决
 - `hooks=[gatewayStart,...]`
   表示哪些 hook 已经实际触发过
 - `hooks=[none]`
@@ -225,15 +225,19 @@ queued -> running -> waiting_delivery -> delivering -> sent_confirmed
 
 ### 原因 1：宿主没有提供发送接口
 
-插件最终回传依赖宿主提供：
+插件最终回传依赖发送能力，按优先级依次尝试：
 
-- `api.sendMessage()`
+1. `api.sendMessage()`
+2. `runtime.telegram.sendMessageTelegram`
+3. 插件配置 `telegramBotToken` 或环境变量 `TELEGRAM_BOT_TOKEN`
 
-如果没有这个桥接：
+如果以上都不可用：
 
 - 插件仍可追踪任务
 - `/async-return` 命令仍可用
 - 但任务可能停在 `waiting_delivery` 或 `delivery_failed`
+
+**最快的解决方式**：设置环境变量 `TELEGRAM_BOT_TOKEN`，插件会自动通过 Telegram Bot API 直接发送消息。
 
 ### 原因 2：事件链路没接全
 
@@ -296,7 +300,7 @@ queued -> running -> waiting_delivery -> delivering -> sent_confirmed
 | 现象 | 更可能的问题 | 建议先查什么 |
 |------|-------------|-------------|
 | `/async-return health` 执行失败 | 插件未加载或命令未注册 | `plugins list`、启动日志 |
-| `sendMessage=missing` | 宿主未提供发送接口 | OpenClaw 是否暴露 `api.sendMessage()` |
+| `sendMessage=missing` | 宿主未提供发送接口且未配置 bot token | 设置环境变量 `TELEGRAM_BOT_TOKEN` 或在插件 config 中配置 `telegramBotToken` |
 | 任务停在 `running` | `agent:end` 未触发或字段不匹配 | agent 完成事件及其 `context` |
 | 任务停在 `waiting_delivery` | 执行完成了，但发送层不可用或未开始投递 | `sendMessage` 状态、诊断结果 |
 | 任务停在 `delivering` | `message:sent` 未触发 | Telegram 发送完成事件 |

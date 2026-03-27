@@ -104,7 +104,7 @@ enabled=true store=.openclaw/telegram-async-return/store.db sendMessage=ok hooks
 - `sendMessage=ok`
   说明宿主已经提供发送接口，自动补发更有机会成功
 - `sendMessage=missing`
-  说明插件能追踪任务，但自动补发链路还没打通
+  说明插件能追踪任务，但自动补发链路还没打通。可设置环境变量 `TELEGRAM_BOT_TOKEN` 快速解决
 - `hooks=[...]`
   说明哪些 hook 实际触发过，可用于判断事件链路有没有跑起来
 
@@ -114,14 +114,12 @@ enabled=true store=.openclaw/telegram-async-return/store.db sendMessage=ok hooks
 
 ### 1. 宿主没有提供发送接口
 
-插件最终回传依赖宿主提供：
-
-- `api.sendMessage()`
-
-没有它时，任务可能停在：
+插件最终回传依赖发送能力。如果宿主没有提供 `api.sendMessage()` 或 `runtime.telegram.sendMessageTelegram`，任务可能停在：
 
 - `waiting_delivery`
 - `delivery_failed`
+
+**快速解决**：设置环境变量 `TELEGRAM_BOT_TOKEN`，插件会自动通过 Telegram Bot API 直接发送。
 
 ### 2. 宿主事件没有接全
 
