@@ -161,6 +161,12 @@ export async function handleMessageReceived(context: HookContext<unknown>) {
   recordHookFired(context.api.runtime, "messageReceived");
   ensureContractHealth(context.api.runtime, config);
 
+  try {
+    log(context, "info", `message_received raw event: ${JSON.stringify(context.event, null, 2)}`);
+  } catch {
+    log(context, "info", `message_received raw event: [unserializable]`);
+  }
+
   const normalized = normalizeMessageReceived(context.event, context.api.runtime);
   if (!normalized) {
     setContractObservation(context.api.runtime, "inboundNormalization", "missing");

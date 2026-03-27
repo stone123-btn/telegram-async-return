@@ -196,7 +196,7 @@ export function resolveTelegramAsyncReturnConfig(
     enabled: readBoolean(input.enabled, DEFAULT_CONFIG.enabled),
     storePath: resolveConfiguredPath(readString(input.storePath, DEFAULT_CONFIG.storePath), resolvePath),
     runtimeBin: readString(input.runtimeBin, DEFAULT_CONFIG.runtimeBin),
-    telegramBotToken: readString(input.telegramBotToken, DEFAULT_CONFIG.telegramBotToken),
+    telegramBotToken: readString(input.telegramBotToken, readString(process.env.TELEGRAM_BOT_TOKEN, DEFAULT_CONFIG.telegramBotToken)),
     ackTemplate: readString(input.ackTemplate, DEFAULT_CONFIG.ackTemplate),
     ackOnAsyncStart: readBoolean(input.ackOnAsyncStart, DEFAULT_CONFIG.ackOnAsyncStart),
     asyncTextLengthThreshold: readNumber(
