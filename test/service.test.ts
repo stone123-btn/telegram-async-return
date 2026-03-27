@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdirSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -165,11 +165,23 @@ describe("service", () => {
   });
 
   it("diagnoseTask recommends inspect_runtime for waiting_delivery without send adapter", async () => {
-    const { task } = await svc.trackTask({ chatId: "c1" });
-    await svc.startTask(task.taskId);
-    await svc.completeTask({ taskId: task.taskId, success: true });
-    const diag = await svc.diagnoseTask({ taskId: task.taskId });
-    expect(diag.recommendedAction).toBe("inspect_runtime");
+    const savedToken = process.env.TELEGRAM_BOT_TOKEN;
+    delete process.env.TELEGRAM_BOT_TOKEN;
+    try {
+      const isolatedSvc = createTelegramAsyncReturnService({
+        pluginConfig: { storePath: join(dir, "store-no-token.db"), telegramBotToken: "" },
+        logger: {},
+        runtime: {},
+        resolvePath: (p: string) => (p.startsWith("/") ? p : join(dir, p)),
+      });
+      const { task } = await isolatedSvc.trackTask({ chatId: "c1" });
+      await isolatedSvc.startTask(task.taskId);
+      await isolatedSvc.completeTask({ taskId: task.taskId, success: true });
+      const diag = await isolatedSvc.diagnoseTask({ taskId: task.taskId });
+      expect(diag.recommendedAction).toBe("inspect_runtime");
+    } finally {
+      if (savedToken !== undefined) process.env.TELEGRAM_BOT_TOKEN = savedToken;
+    }
   });
 
   it("diagnoseTask recommends resend for waiting_delivery with send adapter", async () => {
