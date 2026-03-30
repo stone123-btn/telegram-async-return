@@ -223,7 +223,7 @@ queued → running → waiting_delivery → delivering → sent_confirmed
 ### 输出格式
 
 ```
-enabled=<bool> store=<path> sendAdapter=<kind> hooks=[<fired hooks>] contracts=[inbound:<state>,agent:<state>,outbound:<state>,deliverySignal:host_send_ack] classification=<mode> recent=<n> latest=<task:state|none>
+enabled=<bool> store=<path> sendAdapter=<kind> hooks=[<fired hooks>] contracts=[inbound:<state>,agent:<state>,outbound:<state>,deliverySignal:host_send_ack] classification=<mode> wm=[init:<bool>,agentEnd:<bool>,msgSent:<bool>,probeExpired:<bool>] recent=<n> latest=<task:state|none>
 ```
 
 ### data 字段
@@ -239,11 +239,25 @@ enabled=<bool> store=<path> sendAdapter=<kind> hooks=[<fired hooks>] contracts=[
     "inboundNormalization": "ok",
     "agentCompletionCorrelation": "weak",
     "outboundCorrelation": "unseen",
-    "classification": "explicit_only",
+    "classification": "time_based",
     "deliverySignal": "host_send_ack",
     "sendAdapter": "api.sendMessage"
   },
-  "classification": "explicit_only",
+  "classification": "time_based",
+  "workingMode": {
+    "initialized": true,
+    "hasAgentEnd": true,
+    "hasMessageSent": false,
+    "probeExpired": false,
+    "eventFormat": {
+      "hasContext": true,
+      "hasMetadata": true,
+      "chatIdPath": "context.chatId",
+      "sessionKeyPath": "event.sessionKey",
+      "textPath": "context.text",
+      "channelPath": "context.channel"
+    }
+  },
   "recentTrackedTasks": 1,
   "latestTask": {
     "taskId": "chat-123-abc",
@@ -254,7 +268,7 @@ enabled=<bool> store=<path> sendAdapter=<kind> hooks=[<fired hooks>] contracts=[
     "gatewayStop": false,
     "messageReceived": true,
     "messageSent": false,
-    "agentEnd": false
+    "agentEnd": true
   }
 }
 ```
@@ -266,7 +280,15 @@ enabled=<bool> store=<path> sendAdapter=<kind> hooks=[<fired hooks>] contracts=[
 - `inboundNormalization`：入站消息是否能被标准化
 - `agentCompletionCorrelation`：`agent:end` 是否能稳定关联回已追踪任务
 - `outboundCorrelation`：`message:sent` 是否能稳定关联到待投递任务
-- `classification`：当前异步识别模式
+- `classification`：当前异步识别模式（`time_based` 表示 trackAllMessages 已开启）
+
+`workingMode` 字段说明（1.0.15 新增）：
+
+- `initialized`：是否已收到首条 Telegram 消息并完成初始化
+- `hasAgentEnd`：是否已探测到 `agent:end` 事件能力
+- `hasMessageSent`：是否已探测到 `message:sent` 事件能力
+- `probeExpired`：探测窗口（`probeWindowMs`）是否已过期
+- `eventFormat`：首条消息的事件格式指纹，包含 `chatIdPath`、`sessionKeyPath`、`textPath`、`channelPath` 等字段路径
 
 ---
 
@@ -317,7 +339,9 @@ enabled=<bool> store=<path> sendAdapter=<kind> hooks=[<fired hooks>] contracts=[
 
 预期流转：`queued` → `running` → `waiting_delivery` → `delivering` → `sent_confirmed`
 
-若保持默认 `asyncTextLengthThreshold=0`，普通 Telegram 文本不会自动进入异步链路；测试时应显式带上 `asyncReturn: true`、异步标签或宿主侧业务标记。
+若 `trackAllMessages: true`（1.0.15 默认），所有消息都会被追踪，分类模式为 `time_based`，无需显式标记即可触发异步回传（根据 agent 响应耗时自动判断）。
+
+若 `trackAllMessages: false` 且 `asyncTextLengthThreshold=0`，普通 Telegram 文本不会自动进入异步链路；测试时应显式带上 `asyncReturn: true`、异步标签或宿主侧业务标记。
 
 若停在某个状态，参考 README 中的故障判断表。
 
@@ -349,9 +373,15 @@ enabled=<bool> store=<path> sendAdapter=<kind> hooks=[<fired hooks>] contracts=[
 
 | 配置项 | 默认值 | 集成影响 |
 |--------|--------|---------|
-| `asyncTextLengthThreshold` | `0` | 为 0 时仅依赖显式标记，不自动判定 |
+| `trackAllMessages` | `true` | 开启后所有消息自动追踪，分类模式为 `time_based`，根据 agent 响应耗时决定是否异步回传 |
+| `webhookTimeoutMs` | `30000` | `trackAllMessages` 开启时，agent 响应超过此阈值才触发异步回传 |
+| `maxTaskWaitMs` | `300000` | 任务最大等待时间（毫秒），超时后标记为失败 |
+| `probeWindowMs` | `60000` | WorkingMode 能力探测窗口（毫秒），探测 agentEnd/messageSent 是否可用 |
+| `cleanupCompletedInline` | `true` | 快速完成的任务（trackAll 分类）是否在 agent_end 时直接清理 |
+| `completedInlineRetentionMs` | `300000` | 已内联完成的任务保留时间（毫秒），过期后清理 |
+| `asyncTextLengthThreshold` | `0` | `trackAllMessages` 关闭时生效，为 0 时仅依赖显式标记 |
 | `classification.keywordTriggers` | `[]` | 可用关键词触发异步分类，便于测试和宿主适配 |
 | `classification.acceptPlainLongText` | `false` | 显式允许普通文本走兜底分类，默认关闭 |
 | `autoResendOnDeliveryFailure` | `true` | 发送层不可用时建议设为 false |
 | `recovery.scanOnStartup` | `true` | 依赖 gateway:startup hook |
-| `ackOnAsyncStart` | `true` | 依赖 message:received 的 reply 回调 |
+| `ackOnAsyncStart` | `true` | 依赖 message:received 的 reply 回调。`trackAllMessages` 开启时，trackAll 分类的消息会延迟到 agent_end 再决定是否发 ack |
