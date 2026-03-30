@@ -130,6 +130,21 @@ export async function handleGatewayStart(context: HookContext<unknown>) {
     log(context, "info", `gateway:startup recovered=${recovery.repairedTaskIds.length}`);
   }
 
+  const adapter = resolveSendAdapter({
+    sendMessage: context.api.sendMessage,
+    runtime: context.api.runtime,
+    telegramBotToken: config.telegramBotToken,
+  });
+  if (adapter.kind === "none") {
+    log(
+      context,
+      "warn",
+      "no send adapter configured (sendAdapter=none). Tasks will be tracked but results cannot be delivered to Telegram. " +
+        "Set TELEGRAM_BOT_TOKEN env var, add telegramBotToken to plugin config, " +
+        "or run: async-return setup",
+    );
+  }
+
   if (config.autoResendOnDeliveryFailure) {
     const scheduler = createDeliveryScheduler({
       service,
