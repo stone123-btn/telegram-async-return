@@ -120,12 +120,16 @@ enabled=true store=.openclaw/telegram-async-return/store.db sendAdapter=ok hooks
 
 ### 1. 宿主没有提供发送接口
 
-插件最终回传依赖发送能力。如果宿主没有提供 `api.sendMessage()` 或 `runtime.telegram.sendMessageTelegram`，任务可能停在：
+插件最终回传依赖发送能力。如果宿主没有提供 `api.sendMessage()` 或 `runtime.telegram.sendMessageTelegram`，也没有配置 `TELEGRAM_BOT_TOKEN`，任务会停在：
 
 - `waiting_delivery`
 - `delivery_failed`
 
-**快速解决**：设置环境变量 `TELEGRAM_BOT_TOKEN`，插件会自动通过 Telegram Bot API 直接发送。
+**快速解决**：设置环境变量 `TELEGRAM_BOT_TOKEN` 或在插件配置中添加 `telegramBotToken`，插件会自动通过 Telegram Bot API 直接发送。
+
+```bash
+export TELEGRAM_BOT_TOKEN="123456:ABC-DEF..."
+```
 
 ### 2. 宿主事件没有接全
 

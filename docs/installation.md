@@ -21,7 +21,7 @@
 
 OpenClaw 宿主仍需要自己负责：
 
-- 提供发送接口，例如 `api.sendMessage()`
+- 提供发送接口（或配置 Bot Token），例如 `api.sendMessage()` 或环境变量 `TELEGRAM_BOT_TOKEN`
 - 触发插件监听的事件链路
 - 决定哪些普通 Telegram 消息应该进入异步
 - 决定是否给运维侧暴露独立 CLI
@@ -135,6 +135,19 @@ openclaw plugins install "$(pwd)"
 ```
 
 改完配置后，重启 OpenClaw Gateway。
+
+## 发送能力的三级 fallback
+
+插件会按以下优先级尝试发送结果：
+
+1. **`api.sendMessage()`** — 宿主提供的发送接口（优先）
+2. **`runtime.telegram.sendMessageTelegram`** — OpenClaw runtime fallback
+3. **`TELEGRAM_BOT_TOKEN` 环境变量或 `config.telegramBotToken`** — 直调 Telegram Bot API
+4. **无发送能力** — 仅追踪任务，不发送结果
+
+如果前三级都不可用，插件仍然正常工作，但任务会停在 `waiting_delivery` 或 `delivery_failed`。
+
+**快速解决**：设置环境变量 `TELEGRAM_BOT_TOKEN` 或在插件配置中添加 `telegramBotToken`，插件会自动通过 Telegram Bot API 直接发送。
 
 ## 安装完成后怎么验证
 
@@ -253,6 +266,26 @@ queued -> running -> waiting_delivery -> delivering -> sent_confirmed
 
 **最快的解决方式**：设置环境变量 `TELEGRAM_BOT_TOKEN`，插件会自动通过 Telegram Bot API 直接发送消息。
 
+```bash
+export TELEGRAM_BOT_TOKEN="123456:ABC-DEF..."
+```
+
+或在插件配置中添加：
+
+```jsonc
+{
+  "plugins": {
+    "entries": {
+      "telegram-async-return": {
+        "config": {
+          "telegramBotToken": "123456:ABC-DEF..."
+        }
+      }
+    }
+  }
+}
+```
+
 ### 原因 2：事件链路没接全
 
 插件会监听下面这些事件名：
@@ -319,8 +352,9 @@ queued -> running -> waiting_delivery -> delivering -> sent_confirmed
 |------|-------------|-------------|
 | `/async-return health` 执行失败 | 插件未加载或命令未注册 | `plugins list`、启动日志 |
 | `sendAdapter=none` | 宿主未提供发送接口且未配置 bot token | 设置环境变量 `TELEGRAM_BOT_TOKEN` 或在插件 config 中配置 `telegramBotToken` |
+| `sendAdapter=none` 但任务仍在追踪 | 发送能力缺失，但追踪功能正常 | 这是预期行为，设置 bot token 即可补齐发送能力 |
 | 任务停在 `running` | `agent:end` 未触发或字段不匹配 | agent 完成事件及其 `context` |
-| 任务停在 `waiting_delivery` | 执行完成了，但发送层不可用或未开始投递 | `sendMessage` 状态、诊断结果 |
+| 任务停在 `waiting_delivery` | 执行完成了，但发送层不可用或未开始投递 | `sendAdapter` 状态、诊断结果 |
 | 任务停在 `delivering` | `message:sent` 未触发 | Telegram 发送完成事件 |
 | `delivery_failed` | 发送接口失败或返回异常 | 发送层实现、warn 日志 |
 | 普通长文本完全不触发异步 | `trackAllMessages` 关闭且没有异步分类策略 | 开启 `trackAllMessages: true` 或配置 `asyncReturn`、`tags`、`asyncTextLengthThreshold` |
