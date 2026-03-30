@@ -26,6 +26,8 @@ export interface DeliveryRunResult {
   sentConfirmed: string[];
   failed: string[];
   skipped: string[];
+  expired: string[];
+  cleaned: number;
 }
 
 export function createDeliveryScheduler(options: DeliverySchedulerOptions): DeliveryScheduler {
@@ -52,7 +54,7 @@ export function createDeliveryScheduler(options: DeliverySchedulerOptions): Deli
 
   async function runOnce(): Promise<DeliveryRunResult> {
     if (inFlight) {
-      return { scanned: 0, sentConfirmed: [], failed: [], skipped: [] };
+      return { scanned: 0, sentConfirmed: [], failed: [], skipped: [], expired: [], cleaned: 0 };
     }
 
     inFlight = true;
@@ -61,9 +63,17 @@ export function createDeliveryScheduler(options: DeliverySchedulerOptions): Deli
       sentConfirmed: [],
       failed: [],
       skipped: [],
+      expired: [],
+      cleaned: 0,
     };
 
     try {
+      result.expired = await service.expireTimedOutTasks(config.maxTaskWaitMs);
+
+      if (config.cleanupCompletedInline) {
+        result.cleaned = await service.cleanupCompletedInlineTasks(config.completedInlineRetentionMs);
+      }
+
       const candidates = await service.pendingDeliveryTasks(config.defaultStatusLookbackSeconds);
 
       result.scanned = candidates.length;

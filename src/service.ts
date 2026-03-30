@@ -38,6 +38,9 @@ export interface TelegramAsyncReturnService {
   findLatestDeliveringTaskByChat(chatId: string): Promise<AsyncTaskRecord | undefined>;
   findLatestActiveTaskBySession(sessionId: string): Promise<AsyncTaskRecord | undefined>;
   findLatestActiveTaskBySessionKey(sessionKey: string): Promise<AsyncTaskRecord | undefined>;
+  markCompletedInline(taskId: string, details?: { resultSummary?: string; resultPayload?: unknown; elapsedMs?: number }): Promise<AsyncTaskRecord | undefined>;
+  expireTimedOutTasks(maxWaitMs: number): Promise<string[]>;
+  cleanupCompletedInlineTasks(retentionMs: number): Promise<number>;
   diagnoseTask(input: TaskLookupInput): Promise<DiagnoseTaskResult>;
   repairChat(chatId: string): Promise<RepairChatResult>;
   recoverPendingTasks(): Promise<RepairChatResult>;
@@ -197,6 +200,87 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
     return this.getTaskById(task.taskId);
   }
 
+  async markCompletedInline(
+    taskId: string,
+    details?: { resultSummary?: string; resultPayload?: unknown; elapsedMs?: number },
+  ): Promise<AsyncTaskRecord | undefined> {
+    const task = this.getTaskById(taskId);
+    if (!task) return undefined;
+
+    const timestamp = this.now();
+    const metadata = {
+      ...task.metadata,
+      ...(details?.elapsedMs != null ? { elapsedMs: details.elapsedMs } : {}),
+    };
+
+    this.db.prepare(`
+      UPDATE async_tasks
+      SET state = 'completed_inline',
+          updated_at = ?,
+          completed_at = ?,
+          result_summary = COALESCE(?, result_summary),
+          result_payload = COALESCE(?, result_payload),
+          metadata = ?
+      WHERE task_id = ?
+    `).run(
+      timestamp,
+      timestamp,
+      details?.resultSummary ?? null,
+      details?.resultPayload != null ? JSON.stringify(details.resultPayload) : null,
+      JSON.stringify(metadata),
+      taskId,
+    );
+
+    this.log("info", `marked task ${taskId} as completed_inline`);
+    return this.getTaskById(taskId);
+  }
+
+  async expireTimedOutTasks(maxWaitMs: number): Promise<string[]> {
+    const cutoff = new Date(Date.now() - maxWaitMs).toISOString();
+    const rows = this.db.prepare(`
+      SELECT task_id FROM async_tasks
+      WHERE state IN ('queued', 'running')
+        AND created_at <= ?
+    `).all(cutoff) as { task_id: string }[];
+
+    if (rows.length === 0) return [];
+
+    const timestamp = this.now();
+    const update = this.db.prepare(`
+      UPDATE async_tasks
+      SET state = 'failed',
+          last_error = 'expired: agent_end not received',
+          updated_at = ?
+      WHERE task_id = ?
+    `);
+
+    const expired: string[] = [];
+    for (const row of rows) {
+      update.run(timestamp, row.task_id);
+      expired.push(row.task_id);
+    }
+
+    if (expired.length > 0) {
+      this.log("info", `expired ${expired.length} timed-out tasks`);
+    }
+    return expired;
+  }
+
+  async cleanupCompletedInlineTasks(retentionMs: number): Promise<number> {
+    const cutoff = new Date(Date.now() - retentionMs).toISOString();
+    const result = this.db.prepare(`
+      DELETE FROM async_tasks
+      WHERE state = 'completed_inline'
+        AND completed_at <= ?
+    `).run(cutoff);
+
+    const count = result.changes;
+    if (count > 0) {
+      this.log("info", `cleaned up ${count} completed_inline tasks`);
+    }
+    return count;
+  }
+
   async getStatus(input: TaskLookupInput) {
     return this.findTask(input);
   }
@@ -342,6 +426,14 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
 
     if (task.state === "failed") {
       return { task, recommendedAction: "rerun", notes: ["Execution itself failed."] };
+    }
+
+    if (task.state === "completed_inline") {
+      return {
+        task,
+        recommendedAction: "none",
+        notes: ["Task completed within webhook timeout window.", "No async delivery needed."],
+      };
     }
 
     return { task, recommendedAction: "none", notes: ["Task is already host-confirmed or cancelled."] };

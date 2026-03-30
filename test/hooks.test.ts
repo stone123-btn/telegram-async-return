@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import {
   getContractHealth,
+  getClassificationMode,
   handleAgentEnd,
   handleGatewayStart,
   handleGatewayStop,
@@ -13,6 +14,7 @@ import {
 } from "../src/hooks.js";
 import type { HookContext } from "../src/types.js";
 import { createTelegramAsyncReturnService } from "../src/service.js";
+import { resolveTelegramAsyncReturnConfig } from "../src/config.js";
 
 function tmpDir() {
   const dir = join(tmpdir(), `tar-hooks-test-${randomBytes(6).toString("hex")}`);
@@ -29,6 +31,7 @@ function makePluginConfig(dir: string) {
     asyncTextLengthThreshold: 120,
     autoResendOnDeliveryFailure: false,
     recovery: { enabled: false, scanOnStartup: false },
+    trackAllMessages: false,
   };
 }
 
@@ -399,6 +402,187 @@ describe("hooks", () => {
         expect.stringContaining("agent_end missing correlation identifiers"),
       );
       expect(getContractHealth(api.runtime)?.agentCompletionCorrelation).toBe("missing");
+    });
+  });
+
+  describe("trackAllMessages + time-based classification", () => {
+    function makeTrackAllConfig(dir: string, overrides?: Record<string, unknown>) {
+      return {
+        ...makePluginConfig(dir),
+        trackAllMessages: true,
+        webhookTimeoutMs: 30000,
+        asyncTextLengthThreshold: 0,
+        ...overrides,
+      };
+    }
+
+    it("trackAllMessages=true tracks all telegram messages", async () => {
+      const api = makeApi(dir);
+      const cfg = makeTrackAllConfig(dir);
+      const result = await handleMessageReceived({
+        api,
+        event: {
+          type: "message",
+          action: "received",
+          context: { channel: "telegram", chatId: "c1", text: "short" },
+        },
+        pluginConfig: cfg,
+      });
+
+      expect(result).toBeDefined();
+      expect(result!.task.chatId).toBe("c1");
+      expect(result!.task.metadata.classificationReason).toBe("trackAll");
+    });
+
+    it("trackAllMessages=true does not send ack on message_received", async () => {
+      const reply = vi.fn().mockResolvedValue(undefined);
+      const api = makeApi(dir);
+      const cfg = makeTrackAllConfig(dir);
+      const result = await handleMessageReceived({
+        api,
+        event: {
+          type: "message",
+          action: "received",
+          context: { channel: "telegram", chatId: "c1", text: "hi", reply },
+        },
+        pluginConfig: cfg,
+      });
+
+      expect(result).toBeDefined();
+      expect(reply).not.toHaveBeenCalled();
+    });
+
+    it("agent_end within webhookTimeout marks completed_inline", async () => {
+      const api = makeApi(dir);
+      const cfg = makeTrackAllConfig(dir, { webhookTimeoutMs: 60000 });
+      const tracked = await handleMessageReceived({
+        api,
+        event: {
+          type: "message",
+          action: "received",
+          context: { channel: "telegram", chatId: "c-fast", text: "quick task" },
+        },
+        pluginConfig: cfg,
+      });
+
+      // agent_end arrives immediately (well within 60s)
+      const result = await handleAgentEnd({
+        api,
+        event: {
+          type: "agent",
+          action: "end",
+          context: {
+            taskId: tracked!.task.taskId,
+            chatId: "c-fast",
+            success: true,
+            resultSummary: "done quick",
+          },
+        },
+        pluginConfig: cfg,
+      });
+
+      expect(result).toBeDefined();
+      expect(result!.state).toBe("completed_inline");
+    });
+
+    it("agent_end after webhookTimeout marks waiting_delivery", async () => {
+      const api = makeApi(dir);
+      // Use a very short timeout so we can test the "exceeded" path
+      const cfg = makeTrackAllConfig(dir, { webhookTimeoutMs: 1 });
+      const tracked = await handleMessageReceived({
+        api,
+        event: {
+          type: "message",
+          action: "received",
+          context: { channel: "telegram", chatId: "c-slow", text: "long task" },
+        },
+        pluginConfig: cfg,
+      });
+
+      // Wait just enough to exceed the 1ms timeout
+      await new Promise((r) => setTimeout(r, 10));
+
+      const result = await handleAgentEnd({
+        api,
+        event: {
+          type: "agent",
+          action: "end",
+          context: {
+            taskId: tracked!.task.taskId,
+            chatId: "c-slow",
+            success: true,
+            resultSummary: "finally done",
+          },
+        },
+        pluginConfig: cfg,
+      });
+
+      expect(result).toBeDefined();
+      expect(result!.state).toBe("waiting_delivery");
+    });
+
+    it("asyncReturn=true always goes to waiting_delivery regardless of elapsed time", async () => {
+      const api = makeApi(dir);
+      const cfg = makeTrackAllConfig(dir, { webhookTimeoutMs: 60000 });
+      const tracked = await handleMessageReceived({
+        api,
+        event: {
+          type: "message",
+          action: "received",
+          context: {
+            channel: "telegram",
+            chatId: "c-explicit",
+            text: "explicit async",
+            asyncReturn: true,
+          },
+        },
+        pluginConfig: cfg,
+      });
+
+      // agent_end arrives immediately, but asyncReturn=true forces waiting_delivery
+      const result = await handleAgentEnd({
+        api,
+        event: {
+          type: "agent",
+          action: "end",
+          context: {
+            taskId: tracked!.task.taskId,
+            chatId: "c-explicit",
+            success: true,
+            resultSummary: "done",
+          },
+        },
+        pluginConfig: cfg,
+      });
+
+      expect(result).toBeDefined();
+      expect(result!.state).toBe("waiting_delivery");
+    });
+
+    it("trackAllMessages=false falls back to legacy heuristic", async () => {
+      const api = makeApi(dir);
+      const cfg = {
+        ...makePluginConfig(dir),
+        trackAllMessages: false,
+        asyncTextLengthThreshold: 0,
+      };
+      const result = await handleMessageReceived({
+        api,
+        event: {
+          type: "message",
+          action: "received",
+          context: { channel: "telegram", chatId: "c1", text: "short" },
+        },
+        pluginConfig: cfg,
+      });
+
+      // With threshold=0, trackAllMessages=false, no tags — should not track
+      expect(result).toBeUndefined();
+    });
+
+    it("getClassificationMode returns time_based when trackAllMessages=true", () => {
+      const cfg = resolveTelegramAsyncReturnConfig({ trackAllMessages: true });
+      expect(getClassificationMode(cfg)).toBe("time_based");
     });
   });
 });

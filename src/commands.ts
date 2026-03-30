@@ -1,6 +1,7 @@
 import { resolveTelegramAsyncReturnConfig } from "./config.js";
 import { createTelegramAsyncReturnService } from "./service.js";
 import { getContractHealth, getHookActivity, getClassificationMode } from "./hooks.js";
+import { getWorkingMode } from "./working-mode.js";
 import { resolveSendAdapter } from "./host-send.js";
 import type {
   CommandContextLike,
@@ -52,16 +53,21 @@ export function createAsyncReturnCommandHandler(options: AsyncReturnCommandHandl
         const contractSummary = `contracts=[inbound:${contractHealth.inboundNormalization},agent:${contractHealth.agentCompletionCorrelation},outbound:${contractHealth.outboundCorrelation},deliverySignal:${contractHealth.deliverySignal}]`;
         const classification = contractHealth.classification ?? getClassificationMode(resolvedConfig);
         const latestSummary = latestTask ? `${latestTask.taskId}:${latestTask.state}` : "none";
+        const workingMode = getWorkingMode(options.runtime);
+        const wmSummary = workingMode
+          ? `wm=[init:${String(workingMode.initialized)},agentEnd:${workingMode.hasAgentEnd},msgSent:${workingMode.hasMessageSent},probeExpired:${String(workingMode.probeExpired)}${workingMode.eventFormat?.chatIdPath ? `,chatIdPath:${workingMode.eventFormat.chatIdPath}` : ""}]`
+          : "wm=unknown";
         result = {
           ok: data.ok,
           action: "health",
-          message: `enabled=${String(data.enabled)} store=${data.storePath} sendAdapter=${adapter.kind} ${hookSummary} ${contractSummary} classification=${classification} recent=${recentTasks.length} latest=${latestSummary}`,
+          message: `enabled=${String(data.enabled)} store=${data.storePath} sendAdapter=${adapter.kind} ${hookSummary} ${contractSummary} classification=${classification} ${wmSummary} recent=${recentTasks.length} latest=${latestSummary}`,
           data: {
             ...data,
             sendAdapter: adapter.kind,
             hookActivity: hookActivity ?? null,
             contractHealth,
             classification,
+            workingMode: workingMode ?? null,
             recentTrackedTasks: recentTasks.length,
             latestTask: latestTask ?? null,
           },

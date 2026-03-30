@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/telegram-async-return",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "description": "OpenClaw plugin package for reliable Telegram async task tracking, resend, and recovery.",
   "type": "module",
   "main": "./dist/index.js",
