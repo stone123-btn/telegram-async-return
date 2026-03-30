@@ -472,27 +472,30 @@ export function normalizeMessageReceived(
       getValue(metadata, "provider"),
       getValue(metadata, "surface"),
     ),
-    chatId: pickString(
+    chatId: pickId(
       getValue(context, "chatId"),
       getValue(context, "conversationId"),
       getValue(context, "to"),
       getValue(context, "from"),
+      record.chatId,
+      record.conversationId,
+      record.to,
       getValue(metadata, "chatId"),
       getValue(metadata, "conversationId"),
       getValue(metadata, "senderId"),
       getValue(metadata, "to"),
-      record.from as string | undefined,
+      record.from,
     ),
-    threadId: pickString(getValue(context, "threadId"), getValue(metadata, "threadId")),
-    sessionId: pickString(getValue(context, "sessionId"), getValue(metadata, "sessionId")),
-    sessionKey: pickString(
+    threadId: pickId(getValue(context, "threadId"), record.threadId, getValue(metadata, "threadId")),
+    sessionId: pickId(getValue(context, "sessionId"), record.sessionId, getValue(metadata, "sessionId")),
+    sessionKey: pickId(
       record.sessionKey,
       getValue(context, "sessionKey"),
       getValue(metadata, "sessionKey"),
       getValue(metadata, "senderId"),
-      record.from as string | undefined,
+      record.from,
     ),
-    messageId: pickString(getValue(context, "messageId"), getValue(metadata, "messageId")),
+    messageId: pickId(getValue(context, "messageId"), record.messageId, getValue(metadata, "messageId")),
     text: pickText(getValue(context, "text"), getValue(context, "content"), record.content, getValue(metadata, "text")),
     tags: pickStringArray(getValue(context, "tags"), getValue(metadata, "tags")) ?? [],
     asyncReturn: pickBoolean(getValue(context, "asyncReturn"), getValue(metadata, "asyncReturn")) ?? false,
@@ -532,23 +535,28 @@ export function normalizeAgentEnd(
   }
 
   return {
-    taskId: pickString(getValue(context, "taskId"), record.taskId, getValue(metadata, "taskId")),
-    chatId: pickString(
+    taskId: pickId(getValue(context, "taskId"), record.taskId, getValue(metadata, "taskId")),
+    chatId: pickId(
       getValue(context, "chatId"),
       getValue(context, "conversationId"),
+      getValue(context, "to"),
+      getValue(context, "from"),
+      record.chatId,
+      record.conversationId,
+      record.to,
       getValue(metadata, "chatId"),
       getValue(metadata, "conversationId"),
       getValue(metadata, "senderId"),
       getValue(metadata, "to"),
-      record.from as string | undefined,
+      record.from,
     ),
-    sessionId: pickString(getValue(context, "sessionId"), getValue(metadata, "sessionId")),
-    sessionKey: pickString(
+    sessionId: pickId(getValue(context, "sessionId"), record.sessionId, getValue(metadata, "sessionId")),
+    sessionKey: pickId(
       record.sessionKey,
       getValue(context, "sessionKey"),
       getValue(metadata, "sessionKey"),
       getValue(metadata, "senderId"),
-      record.from as string | undefined,
+      record.from,
     ),
     success,
     status,
@@ -764,6 +772,18 @@ function pickString(...values: unknown[]): string | undefined {
   for (const value of values) {
     if (typeof value === "string" && value.trim()) {
       return value;
+    }
+  }
+  return undefined;
+}
+
+function pickId(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
     }
   }
   return undefined;
