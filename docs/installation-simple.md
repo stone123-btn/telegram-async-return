@@ -51,7 +51,9 @@ openclaw plugins install /absolute/path/to/telegram-async-return
           "ackOnAsyncStart": true,
           "ackTemplate": "已接收，任务会在后台继续处理。完成后我会自动把结果发回这里。",
           "asyncTextLengthThreshold": 0,
-          "autoResendOnDeliveryFailure": true
+          "autoResendOnDeliveryFailure": true,
+          "trackAllMessages": true,
+          "webhookTimeoutMs": 30000
         }
       }
     }
@@ -94,19 +96,23 @@ openclaw plugins list
 典型输出类似：
 
 ```text
-enabled=true store=.openclaw/telegram-async-return/store.db sendMessage=ok hooks=[gatewayStart] contracts=[agentEndIdentifiers:unseen,messageSentTaskId:unseen,deliverySignal:host_send_ack]
+enabled=true store=.openclaw/telegram-async-return/store.db sendAdapter=ok hooks=[gatewayStart] contracts=[inbound:ok,agent:unseen,outbound:unseen,deliverySignal:host_send_ack] classification=time_based wm=[init:true,agentEnd:false,msgSent:false,probeExpired:false] recent=0 latest=none
 ```
 
 重点只看这几个字段：
 
 - `enabled=true`
   说明插件已启用
-- `sendMessage=ok`
+- `sendAdapter=ok`
   说明宿主已经提供发送接口，自动补发更有机会成功
-- `sendMessage=missing`
+- `sendAdapter=none`
   说明插件能追踪任务，但自动补发链路还没打通。可设置环境变量 `TELEGRAM_BOT_TOKEN` 快速解决
 - `hooks=[...]`
   说明哪些 hook 实际触发过，可用于判断事件链路有没有跑起来
+- `classification=time_based`
+  说明当前分类模式。`time_based` 表示 `trackAllMessages` 已开启，所有消息都会被追踪
+- `wm=[...]`
+  WorkingMode 探测状态，显示插件对宿主事件能力的自动检测结果
 
 ## 为什么“装好了”还是可能没反应
 
@@ -131,25 +137,21 @@ enabled=true store=.openclaw/telegram-async-return/store.db sendMessage=ok hooks
 
 少任何一环，都可能导致任务卡在中间状态。
 
-### 3. 普通 Telegram 文本默认不会自动进异步
+### 3. 普通 Telegram 文本的异步分类
 
-默认配置里：
+从 1.0.15 开始，推荐开启 `trackAllMessages: true`（默认已开启）。开启后：
 
-```jsonc
-{
-  "asyncTextLengthThreshold": 0
-}
-```
+- 所有消息都会被追踪，但**不会立即发 ack**
+- 在 `agent:end` 时根据响应耗时判断：超过 `webhookTimeoutMs`（默认 30 秒）才触发异步回传
+- 快速响应的消息会被静默完成，用户无感知
 
-这表示普通文本消息不会仅凭“内容比较长”就自动进入异步。
-
-要触发异步，通常要满足下面之一：
+如果 `trackAllMessages` 关闭，回退到旧逻辑——普通文本不会仅凭”内容比较长”就自动进入异步。要触发异步，需要满足下面之一：
 
 - 消息上下文里有 `asyncReturn: true`
-- 消息上下文里有 `tags: ["long-task"]`、`["async"]` 或 `["background"]`
+- 消息上下文里有 `tags: [“long-task”]`、`[“async”]` 或 `[“background”]`
 - 把 `asyncTextLengthThreshold` 改成正数
 
-所以如果你没有看到“后台处理中”的确认消息，不一定是安装失败，也可能只是宿主没有把普通消息纳入异步分类。
+所以如果 `trackAllMessages` 关闭且没有上述标记，没有看到”后台处理中”不一定是安装失败，也可能只是宿主没有把普通消息纳入异步分类。
 
 ## 最稳的验收顺序
 

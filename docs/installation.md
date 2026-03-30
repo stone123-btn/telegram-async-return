@@ -110,6 +110,12 @@ openclaw plugins install "$(pwd)"
           "ackTemplate": "已接收，任务会在后台继续处理。完成后我会自动把结果发回这里。",
           "asyncTextLengthThreshold": 0,
           "autoResendOnDeliveryFailure": true,
+          "trackAllMessages": true,
+          "webhookTimeoutMs": 30000,
+          "maxTaskWaitMs": 300000,
+          "probeWindowMs": 60000,
+          "cleanupCompletedInline": true,
+          "completedInlineRetentionMs": 300000,
           "recovery": {
             "enabled": true,
             "scanOnStartup": true,
@@ -163,7 +169,7 @@ openclaw plugins list
 典型输出类似：
 
 ```text
-enabled=true store=.openclaw/telegram-async-return/store.db sendMessage=ok hooks=[gatewayStart] contracts=[agentEndIdentifiers:unseen,messageSentTaskId:unseen,deliverySignal:host_send_ack]
+enabled=true store=.openclaw/telegram-async-return/store.db sendAdapter=ok hooks=[gatewayStart] contracts=[inbound:ok,agent:unseen,outbound:unseen,deliverySignal:host_send_ack] classification=time_based wm=[init:true,agentEnd:false,msgSent:false,probeExpired:false] recent=0 latest=none
 ```
 
 字段含义如下：
@@ -172,9 +178,9 @@ enabled=true store=.openclaw/telegram-async-return/store.db sendMessage=ok hooks
   插件已启用
 - `store=...`
   SQLite 状态库路径
-- `sendMessage=ok`
+- `sendAdapter=ok`
   宿主已提供发送接口，自动回传更有可能正常工作
-- `sendMessage=missing`
+- `sendAdapter=none`
   宿主没有提供发送接口且未配置 bot token，插件可以追踪任务，但自动回传不能保证。可设置环境变量 `TELEGRAM_BOT_TOKEN` 快速解决
 - `hooks=[gatewayStart,...]`
   表示哪些 hook 已经实际触发过
@@ -182,6 +188,14 @@ enabled=true store=.openclaw/telegram-async-return/store.db sendMessage=ok hooks
   还没有任何 hook 被触发
 - `hooks=unknown`
   当前 runtime 无法记录 hook 活动
+- `classification=time_based`
+  当前异步分类模式。`time_based` 表示已开启 `trackAllMessages`，所有消息都会被追踪，根据响应耗时决定是否需要异步回传。其他值：`explicit_only` 仅显式标记、`keyword_enhanced` 关键词增强、`full_auto` 全自动
+- `wm=[init:true,agentEnd:false,msgSent:false,probeExpired:false]`
+  WorkingMode 自动探测状态。`init` 表示是否已初始化，`agentEnd`/`msgSent` 表示是否探测到对应事件能力，`probeExpired` 表示探测窗口是否已过期
+- `recent=<n>`
+  最近追踪的任务数量
+- `latest=<taskId:state|none>`
+  最近一条任务的 ID 和状态
 
 ### 第 3 步：先测显式异步消息
 
@@ -260,27 +274,31 @@ queued -> running -> waiting_delivery -> delivering -> sent_confirmed
 - 卡在 `delivering`
   往往表示 `message:sent` 没触发，导致无法确认已送达
 
-### 原因 3：普通 Telegram 文本默认不会自动进入异步
+### 原因 3：普通 Telegram 文本默认不会自动进入异步（除非开启 trackAllMessages）
 
-默认配置是：
+如果配置了 `trackAllMessages: true`（1.0.15 起默认开启），所有消息都会被追踪，分类模式为 `time_based`。此时：
+
+- 所有消息收到后立即开始追踪，但**不会立即发送 ack 确认**
+- 插件在 `agent:end` 时根据响应耗时判断：如果耗时超过 `webhookTimeoutMs`（默认 30 秒），认为是长任务，才触发异步回传
+- 如果耗时很短（快速响应），任务会被标记为已完成并在后台清理，用户感知不到异步介入
+
+如果 `trackAllMessages: false`，回退到旧的分类逻辑：
 
 ```jsonc
 {
-  "asyncTextLengthThreshold": 0
+  “asyncTextLengthThreshold”: 0
 }
 ```
 
-这意味着：
-
-- 普通 Telegram 文本不会仅因为“很长”就自动进入异步
+这意味着普通 Telegram 文本不会仅因为”很长”就自动进入异步。
 
 要进入异步，宿主至少要满足下面之一：
 
 - 给消息上下文设置 `asyncReturn: true`
-- 给消息上下文设置 `tags: ["long-task"]`、`["async"]` 或 `["background"]`
+- 给消息上下文设置 `tags: [“long-task”]`、`[“async”]` 或 `[“background”]`
 - 把 `asyncTextLengthThreshold` 改成正数
 
-所以“没有先回后台处理中”不一定是安装失败，也可能只是宿主没有接入普通消息自动异步化策略。
+所以如果 `trackAllMessages` 关闭且没有上述标记，”没有先回后台处理中”不一定是安装失败，也可能只是宿主没有接入普通消息自动异步化策略。
 
 ## 推荐验收流程
 
@@ -300,12 +318,13 @@ queued -> running -> waiting_delivery -> delivering -> sent_confirmed
 | 现象 | 更可能的问题 | 建议先查什么 |
 |------|-------------|-------------|
 | `/async-return health` 执行失败 | 插件未加载或命令未注册 | `plugins list`、启动日志 |
-| `sendMessage=missing` | 宿主未提供发送接口且未配置 bot token | 设置环境变量 `TELEGRAM_BOT_TOKEN` 或在插件 config 中配置 `telegramBotToken` |
+| `sendAdapter=none` | 宿主未提供发送接口且未配置 bot token | 设置环境变量 `TELEGRAM_BOT_TOKEN` 或在插件 config 中配置 `telegramBotToken` |
 | 任务停在 `running` | `agent:end` 未触发或字段不匹配 | agent 完成事件及其 `context` |
 | 任务停在 `waiting_delivery` | 执行完成了，但发送层不可用或未开始投递 | `sendMessage` 状态、诊断结果 |
 | 任务停在 `delivering` | `message:sent` 未触发 | Telegram 发送完成事件 |
 | `delivery_failed` | 发送接口失败或返回异常 | 发送层实现、warn 日志 |
-| 普通长文本完全不触发异步 | 没有异步分类策略 | `asyncReturn`、`tags`、`asyncTextLengthThreshold` |
+| 普通长文本完全不触发异步 | `trackAllMessages` 关闭且没有异步分类策略 | 开启 `trackAllMessages: true` 或配置 `asyncReturn`、`tags`、`asyncTextLengthThreshold` |
+| 快速响应也收到了 ack 确认 | `trackAllMessages` 开启但阈值过低 | 调高 `webhookTimeoutMs` 或检查 agent 响应耗时 |
 
 ## `/async-return` 和独立 CLI 的区别
 
