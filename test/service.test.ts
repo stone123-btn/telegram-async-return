@@ -306,6 +306,16 @@ describe("service", () => {
     expect(done).toBeUndefined();
   });
 
+  it("service exposes host lifecycle start/stop methods", async () => {
+    await expect(svc.start()).resolves.toBeUndefined();
+    await expect(svc.start()).resolves.toBeUndefined();
+    await expect(svc.stop()).resolves.toBeUndefined();
+    await expect(svc.start()).resolves.toBeUndefined();
+
+    const result = await svc.trackTask({ chatId: "c1", prompt: "after restart" });
+    expect(result.task.taskId).toBeTruthy();
+  });
+
   it("findLatestActiveTaskBySession returns newest active task", async () => {
     const first = await svc.trackTask({ chatId: "c1", sessionId: "s1", prompt: "first" });
     await svc.startTask(first.task.taskId);

@@ -24,6 +24,8 @@ export interface TelegramAsyncReturnService {
   id: string;
   name: string;
   config: TelegramAsyncReturnPluginConfig;
+  start(): Promise<void>;
+  stop(): Promise<void>;
   health(): Promise<{ ok: boolean; storePath: string; runtimeBin: string; enabled: boolean }>;
   trackTask(input: TrackTaskInput): Promise<TrackTaskResult>;
   startTask(taskId: string): Promise<AsyncTaskRecord | undefined>;
@@ -79,12 +81,38 @@ class SqliteTelegramAsyncReturnService implements TelegramAsyncReturnService {
 
   private readonly logger?: CreateTelegramAsyncReturnServiceOptions["logger"];
   private db: Database.Database;
+  private started = false;
 
   constructor(private readonly options: CreateTelegramAsyncReturnServiceOptions) {
     this.config = resolveTelegramAsyncReturnConfig(options.pluginConfig, options.resolvePath);
     this.logger = options.logger;
     this.db = this.openDatabase();
     this.migrate();
+  }
+
+  async start() {
+    if (this.started) {
+      return;
+    }
+
+    if (!this.db.open) {
+      this.db = this.openDatabase();
+      this.migrate();
+    }
+
+    this.started = true;
+    this.log("info", "[telegram-async-return] service started");
+  }
+
+  async stop() {
+    if (!this.db.open) {
+      this.started = false;
+      return;
+    }
+
+    this.db.close();
+    this.started = false;
+    this.log("info", "[telegram-async-return] service stopped");
   }
 
   async health() {
