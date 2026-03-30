@@ -837,5 +837,12 @@ function isRecord(value: unknown): value is Record<string | symbol, unknown> {
 }
 
 function isService(value: unknown): value is TelegramAsyncReturnService {
-  return typeof value === "object" && value !== null && "trackTask" in value && "health" in value;
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "trackTask" in value &&
+    "health" in value &&
+    "start" in value &&
+    "stop" in value
+  );
 }
