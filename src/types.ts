@@ -1,6 +1,7 @@
 export type AsyncTaskState =
   | "queued"
   | "running"
+  | "completed_inline"
   | "waiting_delivery"
   | "delivering"
   | "sent_confirmed"
@@ -75,6 +76,12 @@ export interface TelegramAsyncReturnPluginConfig {
     keywordTriggers: string[];
     acceptPlainLongText: boolean;
   };
+  webhookTimeoutMs: number;
+  maxTaskWaitMs: number;
+  probeWindowMs: number;
+  trackAllMessages: boolean;
+  cleanupCompletedInline: boolean;
+  completedInlineRetentionMs: number;
 }
 
 export interface AsyncTaskRecord {
@@ -182,7 +189,27 @@ export interface CommandContextLike {
 }
 
 export type ContractObservation = "unseen" | "ok" | "weak" | "missing";
-export type ClassificationMode = "explicit_only" | "threshold_fallback" | "hybrid";
+export type ClassificationMode = "explicit_only" | "threshold_fallback" | "hybrid" | "time_based";
+
+export type CapabilityState = "unknown" | "detected" | "absent";
+
+export interface EventFormatFingerprint {
+  hasContext: boolean;
+  hasMetadata: boolean;
+  chatIdPath?: string;
+  sessionKeyPath?: string;
+  textPath?: string;
+  channelPath?: string;
+}
+
+export interface WorkingMode {
+  initialized: boolean;
+  eventFormat?: EventFormatFingerprint;
+  hasAgentEnd: CapabilityState;
+  hasMessageSent: CapabilityState;
+  probeStartedAt?: number;
+  probeExpired: boolean;
+}
 
 export interface ContractHealth {
   inboundNormalization: ContractObservation;

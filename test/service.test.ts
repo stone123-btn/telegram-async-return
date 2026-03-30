@@ -326,4 +326,98 @@ describe("service", () => {
     expect(found?.taskId).toBe(tracked.task.taskId);
     expect(found?.state).toBe("waiting_delivery");
   });
+
+  describe("markCompletedInline", () => {
+    it("sets state to completed_inline", async () => {
+      const { task } = await svc.trackTask({ chatId: "c1" });
+      await svc.startTask(task.taskId);
+      const inlined = await svc.markCompletedInline(task.taskId, {
+        resultSummary: "quick result",
+        elapsedMs: 500,
+      });
+      expect(inlined?.state).toBe("completed_inline");
+      expect(inlined?.completedAt).toBeTruthy();
+      expect(inlined?.resultSummary).toBe("quick result");
+      expect(inlined?.metadata.elapsedMs).toBe(500);
+    });
+
+    it("returns undefined for non-existent task", async () => {
+      const result = await svc.markCompletedInline("nonexistent");
+      expect(result).toBeUndefined();
+    });
+  });
+
+  describe("expireTimedOutTasks", () => {
+    it("expires tasks older than maxWaitMs", async () => {
+      const { task } = await svc.trackTask({ chatId: "c1" });
+      await svc.startTask(task.taskId);
+
+      // expire with 0ms wait — everything should expire
+      const expired = await svc.expireTimedOutTasks(0);
+      expect(expired).toContain(task.taskId);
+
+      const status = await svc.getStatus({ taskId: task.taskId });
+      expect(status?.state).toBe("failed");
+      expect(status?.lastError).toContain("expired");
+    });
+
+    it("does not expire recent tasks", async () => {
+      const { task } = await svc.trackTask({ chatId: "c1" });
+      await svc.startTask(task.taskId);
+
+      const expired = await svc.expireTimedOutTasks(300000);
+      expect(expired).not.toContain(task.taskId);
+
+      const status = await svc.getStatus({ taskId: task.taskId });
+      expect(status?.state).toBe("running");
+    });
+
+    it("does not expire already completed tasks", async () => {
+      const { task } = await svc.trackTask({ chatId: "c1" });
+      await svc.startTask(task.taskId);
+      await svc.completeTask({ taskId: task.taskId, success: true });
+
+      const expired = await svc.expireTimedOutTasks(0);
+      expect(expired).not.toContain(task.taskId);
+    });
+  });
+
+  describe("cleanupCompletedInlineTasks", () => {
+    it("deletes old completed_inline tasks", async () => {
+      const { task } = await svc.trackTask({ chatId: "c1" });
+      await svc.startTask(task.taskId);
+      await svc.markCompletedInline(task.taskId, { resultSummary: "done" });
+
+      // cleanup with 0ms retention — should delete immediately
+      const cleaned = await svc.cleanupCompletedInlineTasks(0);
+      expect(cleaned).toBe(1);
+
+      const status = await svc.getStatus({ taskId: task.taskId });
+      expect(status).toBeUndefined();
+    });
+
+    it("retains recent completed_inline tasks", async () => {
+      const { task } = await svc.trackTask({ chatId: "c1" });
+      await svc.startTask(task.taskId);
+      await svc.markCompletedInline(task.taskId, { resultSummary: "done" });
+
+      const cleaned = await svc.cleanupCompletedInlineTasks(300000);
+      expect(cleaned).toBe(0);
+
+      const status = await svc.getStatus({ taskId: task.taskId });
+      expect(status?.state).toBe("completed_inline");
+    });
+  });
+
+  describe("diagnoseTask for completed_inline", () => {
+    it("recommends none for completed_inline task", async () => {
+      const { task } = await svc.trackTask({ chatId: "c1" });
+      await svc.startTask(task.taskId);
+      await svc.markCompletedInline(task.taskId, { resultSummary: "done" });
+
+      const diag = await svc.diagnoseTask({ taskId: task.taskId });
+      expect(diag.recommendedAction).toBe("none");
+      expect(diag.notes.some((n) => n.includes("webhook timeout"))).toBe(true);
+    });
+  });
 });

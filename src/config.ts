@@ -40,6 +40,12 @@ const DEFAULT_CONFIG: TelegramAsyncReturnPluginConfig = {
     keywordTriggers: [],
     acceptPlainLongText: false,
   },
+  webhookTimeoutMs: 30000,
+  maxTaskWaitMs: 300000,
+  probeWindowMs: 60000,
+  trackAllMessages: true,
+  cleanupCompletedInline: true,
+  completedInlineRetentionMs: 300000,
 };
 
 const CONFIG_SCHEMA = {
@@ -179,6 +185,34 @@ const CONFIG_SCHEMA = {
         },
       },
     },
+    webhookTimeoutMs: {
+      type: "number",
+      minimum: 0,
+      default: DEFAULT_CONFIG.webhookTimeoutMs,
+    },
+    maxTaskWaitMs: {
+      type: "number",
+      minimum: 0,
+      default: DEFAULT_CONFIG.maxTaskWaitMs,
+    },
+    probeWindowMs: {
+      type: "number",
+      minimum: 0,
+      default: DEFAULT_CONFIG.probeWindowMs,
+    },
+    trackAllMessages: {
+      type: "boolean",
+      default: DEFAULT_CONFIG.trackAllMessages,
+    },
+    cleanupCompletedInline: {
+      type: "boolean",
+      default: DEFAULT_CONFIG.cleanupCompletedInline,
+    },
+    completedInlineRetentionMs: {
+      type: "number",
+      minimum: 0,
+      default: DEFAULT_CONFIG.completedInlineRetentionMs,
+    },
   },
 };
 
@@ -279,6 +313,12 @@ export function resolveTelegramAsyncReturnConfig(
         DEFAULT_CONFIG.classification.acceptPlainLongText,
       ),
     },
+    webhookTimeoutMs: readNumber(input.webhookTimeoutMs, DEFAULT_CONFIG.webhookTimeoutMs),
+    maxTaskWaitMs: readNumber(input.maxTaskWaitMs, DEFAULT_CONFIG.maxTaskWaitMs),
+    probeWindowMs: readNumber(input.probeWindowMs, DEFAULT_CONFIG.probeWindowMs),
+    trackAllMessages: readBoolean(input.trackAllMessages, DEFAULT_CONFIG.trackAllMessages),
+    cleanupCompletedInline: readBoolean(input.cleanupCompletedInline, DEFAULT_CONFIG.cleanupCompletedInline),
+    completedInlineRetentionMs: readNumber(input.completedInlineRetentionMs, DEFAULT_CONFIG.completedInlineRetentionMs),
   };
 
   if (config.resend.maxDelayMs < config.resend.minDelayMs) {

@@ -156,4 +156,52 @@ describe("scheduler", () => {
     const result = await scheduler.runOnce();
     expect(result.sentConfirmed).toContain(task.taskId);
   });
+
+  it("runOnce expires timed-out tasks", async () => {
+    const svc = makeService(dir);
+    const { task } = await svc.trackTask({ chatId: "c1" });
+    await svc.startTask(task.taskId);
+
+    const config = resolveTelegramAsyncReturnConfig({
+      storePath: join(dir, "store.db"),
+      maxTaskWaitMs: 0, // expire immediately
+    });
+
+    const scheduler = createDeliveryScheduler({
+      service: svc,
+      config,
+      deliver: async () => true,
+    });
+
+    const result = await scheduler.runOnce();
+    expect(result.expired).toContain(task.taskId);
+
+    const status = await svc.getStatus({ taskId: task.taskId });
+    expect(status?.state).toBe("failed");
+  });
+
+  it("runOnce cleans up completed_inline tasks", async () => {
+    const svc = makeService(dir);
+    const { task } = await svc.trackTask({ chatId: "c1" });
+    await svc.startTask(task.taskId);
+    await svc.markCompletedInline(task.taskId, { resultSummary: "quick" });
+
+    const config = resolveTelegramAsyncReturnConfig({
+      storePath: join(dir, "store.db"),
+      cleanupCompletedInline: true,
+      completedInlineRetentionMs: 0, // clean up immediately
+    });
+
+    const scheduler = createDeliveryScheduler({
+      service: svc,
+      config,
+      deliver: async () => true,
+    });
+
+    const result = await scheduler.runOnce();
+    expect(result.cleaned).toBe(1);
+
+    const status = await svc.getStatus({ taskId: task.taskId });
+    expect(status).toBeUndefined();
+  });
 });

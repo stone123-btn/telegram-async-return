@@ -2,6 +2,11 @@ import { resolveTelegramAsyncReturnConfig } from "./config.js";
 import { createTelegramAsyncReturnService } from "./service.js";
 import { createDeliveryScheduler, type DeliveryScheduler } from "./scheduler.js";
 import { resolveSendAdapter } from "./host-send.js";
+import {
+  initializeWorkingMode,
+  recordCapability,
+  checkProbeExpiry,
+} from "./working-mode.js";
 import type {
   AsyncTaskState,
   ClassificationMode,
@@ -27,7 +32,7 @@ interface HookActivity {
 
 interface TrackDecision {
   shouldTrack: boolean;
-  reason: "asyncReturn" | "tag" | "keyword" | "textLength" | "none";
+  reason: "asyncReturn" | "tag" | "keyword" | "textLength" | "trackAll" | "none";
 }
 
 function recordHookFired(runtime: unknown, hook: keyof HookActivity) {
@@ -53,6 +58,9 @@ export function getHookActivity(runtime: unknown): HookActivity | undefined {
 }
 
 export function getClassificationMode(config: TelegramAsyncReturnPluginConfig): ClassificationMode {
+  if (config.trackAllMessages) {
+    return "time_based";
+  }
   const hasThresholdFallback = config.asyncTextLengthThreshold > 0 || config.classification.acceptPlainLongText;
   const hasKeywords = config.classification.keywordTriggers.length > 0;
   if (!hasThresholdFallback && !hasKeywords) {
@@ -178,6 +186,10 @@ export async function handleMessageReceived(context: HookContext<unknown>) {
     return;
   }
 
+  // Initialize WorkingMode on first Telegram message
+  initializeWorkingMode(context.api.runtime, context.event, config);
+  checkProbeExpiry(context.api.runtime, config);
+
   if (!normalized.chatId && !normalized.sessionId && !normalized.sessionKey) {
     setContractObservation(context.api.runtime, "inboundNormalization", "missing");
     logContractMismatch(context, config, "message_received normalized but missing chatId/sessionId/sessionKey");
@@ -227,7 +239,9 @@ export async function handleMessageReceived(context: HookContext<unknown>) {
     await service.startTask(tracked.task.taskId);
   }
 
-  if (config.ackOnAsyncStart && !tracked.task.ackSentAt && typeof normalized.reply === "function") {
+  // When reason is "trackAll", defer ack — it will be decided at agent_end
+  const shouldAck = decision.reason !== "trackAll";
+  if (shouldAck && config.ackOnAsyncStart && !tracked.task.ackSentAt && typeof normalized.reply === "function") {
     await normalized.reply(config.ackTemplate);
     await service.acknowledgeTask(tracked.task.taskId, config.ackTemplate);
   }
@@ -248,6 +262,8 @@ export async function handleAgentEnd(context: HookContext<unknown>) {
 
   recordHookFired(context.api.runtime, "agentEnd");
   ensureContractHealth(context.api.runtime, config);
+  recordCapability(context.api.runtime, "agentEnd");
+  checkProbeExpiry(context.api.runtime, config);
 
   const normalized = normalizeAgentEnd(context.event, context.api.runtime);
   if (!normalized) {
@@ -282,18 +298,79 @@ export async function handleAgentEnd(context: HookContext<unknown>) {
     : (normalized.chatId || normalized.sessionKey ? "weak" : "missing");
   setContractObservation(context.api.runtime, "agentCompletionCorrelation", correlation);
 
+  // Look up the task first to check classification reason and elapsed time
+  const existingTask = resolvedTaskId
+    ? await service.getStatus({ taskId: resolvedTaskId })
+    : await service.getStatus({
+        chatId: normalized.chatId,
+        sessionId: normalized.sessionId,
+        sessionKey: normalized.sessionKey,
+        latest: true,
+      });
+
+  if (!existingTask) {
+    logContractMismatch(context, config, "agent_end could not resolve tracked task from available identifiers");
+    return;
+  }
+
+  const classificationReason = existingTask.metadata?.classificationReason as string | undefined;
+  const isExplicitAsync = classificationReason === "asyncReturn" || classificationReason === "tag";
+  const isTrackAll = classificationReason === "trackAll";
+  const isSuccess = normalized.success ?? (!normalized.error && normalized.status !== "failed" && normalized.status !== "error");
+
+  // For explicit async tasks, legacy heuristic tasks, or failed tasks, always use the standard completeTask path
+  if (isExplicitAsync || !isTrackAll || !isSuccess) {
+    const completed = await service.completeTask({
+      taskId: existingTask.taskId,
+      success: isSuccess,
+      resultSummary: normalized.resultSummary,
+      resultPayload: normalized.resultPayload,
+      error: normalized.error,
+      metadata: {
+        source: "agent:end",
+        status: normalized.status,
+      },
+    });
+
+    if (!completed) {
+      logContractMismatch(context, config, "agent_end could not resolve tracked task from available identifiers");
+      return;
+    }
+
+    if (completed.state === "waiting_delivery" && config.autoResendOnDeliveryFailure) {
+      await service.resendTask(completed.taskId);
+    }
+
+    log(context, "info", `agent:end task=${completed.taskId} state=${completed.state}`);
+    return completed;
+  }
+
+  // Time-based classification: check elapsed time
+  const startTime = existingTask.startedAt ?? existingTask.createdAt;
+  const elapsedMs = Date.now() - Date.parse(startTime);
+
+  if (elapsedMs < config.webhookTimeoutMs) {
+    // Short task — mark as completed_inline, no async delivery needed
+    const inlined = await service.markCompletedInline(existingTask.taskId, {
+      resultSummary: normalized.resultSummary,
+      resultPayload: normalized.resultPayload,
+      elapsedMs,
+    });
+
+    log(context, "info", `agent:end task=${existingTask.taskId} state=completed_inline elapsed=${elapsedMs}ms`);
+    return inlined;
+  }
+
+  // Long task — use standard completeTask → waiting_delivery → async delivery
   const completed = await service.completeTask({
-    taskId: resolvedTaskId,
-    chatId: resolvedTaskId ? undefined : normalized.chatId,
-    sessionId: resolvedTaskId ? undefined : normalized.sessionId,
-    sessionKey: resolvedTaskId ? undefined : normalized.sessionKey,
-    success: normalized.success ?? (!normalized.error && normalized.status !== "failed" && normalized.status !== "error"),
+    taskId: existingTask.taskId,
+    success: true,
     resultSummary: normalized.resultSummary,
     resultPayload: normalized.resultPayload,
-    error: normalized.error,
     metadata: {
       source: "agent:end",
       status: normalized.status,
+      elapsedMs,
     },
   });
 
@@ -306,7 +383,7 @@ export async function handleAgentEnd(context: HookContext<unknown>) {
     await service.resendTask(completed.taskId);
   }
 
-  log(context, "info", `agent:end task=${completed.taskId} state=${completed.state}`);
+  log(context, "info", `agent:end task=${completed.taskId} state=${completed.state} elapsed=${elapsedMs}ms`);
   return completed;
 }
 
@@ -318,6 +395,8 @@ export async function handleMessageSent(context: HookContext<unknown>) {
 
   recordHookFired(context.api.runtime, "messageSent");
   ensureContractHealth(context.api.runtime, config);
+  recordCapability(context.api.runtime, "messageSent");
+  checkProbeExpiry(context.api.runtime, config);
 
   const normalized = normalizeMessageSent(context.event, context.api.runtime);
   if (!normalized) {
@@ -563,6 +642,10 @@ function shouldTrackAsyncTask(
   const tags = event.tags ?? [];
   if (tags.some((tag) => ["long-task", "async", "background"].includes(tag))) {
     return { shouldTrack: true, reason: "tag" };
+  }
+
+  if (config.trackAllMessages) {
+    return { shouldTrack: true, reason: "trackAll" };
   }
 
   const text = (event.text ?? "").trim();
