@@ -36,7 +36,14 @@ const plugin = {
       runtime: api.runtime,
       telegramBotToken: resolvedConfig.telegramBotToken,
     });
-    api.logger?.info?.(`[telegram-async-return] send adapter: ${adapter.kind}`);
+    if (adapter.kind === "none") {
+      api.logger?.warn?.(
+        `[telegram-async-return] send adapter: none — results will not be delivered to Telegram. ` +
+          `Set TELEGRAM_BOT_TOKEN, add telegramBotToken to plugin config, or run: async-return setup`,
+      );
+    } else {
+      api.logger?.info?.(`[telegram-async-return] send adapter: ${adapter.kind}`);
+    }
 
     api.registerService(
       createTelegramAsyncReturnService({

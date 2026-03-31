@@ -165,6 +165,86 @@ export function createAsyncReturnCommandHandler(options: AsyncReturnCommandHandl
         break;
       }
 
+      case "setup": {
+        const token = getOption(argv, "--token") ?? (argv[1] && !argv[1].startsWith("--") ? argv[1] : undefined);
+        const adapter = resolveSendAdapter({
+          sendMessage: options.sendMessage,
+          runtime: options.runtime,
+          telegramBotToken: resolvedConfig.telegramBotToken,
+        });
+
+        if (adapter.kind !== "none") {
+          result = {
+            ok: true,
+            action: "setup",
+            message: `Send adapter already configured: ${adapter.kind}\nNo token setup needed.`,
+            data: { sendAdapter: adapter.kind, configured: true },
+          };
+          break;
+        }
+
+        if (!token) {
+          result = {
+            ok: false,
+            action: "setup",
+            message: buildSetupInstructions(),
+            data: { sendAdapter: "none", configured: false },
+          };
+          break;
+        }
+
+        const tokenValid = /^\d+:[A-Za-z0-9_-]{35,}$/.test(token);
+        if (!tokenValid) {
+          result = {
+            ok: false,
+            action: "setup",
+            message: "Token format is invalid. Expected: <bot_id>:<secret> (e.g., 123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw)",
+            data: { sendAdapter: "none", configured: false, error: "invalid_token_format" },
+          };
+          break;
+        }
+
+        try {
+          const res = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+          const body = await res.json() as { ok: boolean; description?: string; result?: { username?: string } };
+          if (!res.ok || !body.ok) {
+            result = {
+              ok: false,
+              action: "setup",
+              message: `Token rejected by Telegram API: ${body.description ?? String(res.status)}\nCheck that the token is correct and try again.`,
+              data: { sendAdapter: "none", configured: false, error: "api_rejected" },
+            };
+            break;
+          }
+          const botUsername = body.result?.username ?? "unknown";
+          result = {
+            ok: true,
+            action: "setup",
+            message: [
+              `Token verified. Bot: @${botUsername}`,
+              "",
+              "Configure by choosing one of the following:",
+              `  Option 1 — Environment variable (recommended):`,
+              `    export TELEGRAM_BOT_TOKEN=${token}`,
+              `    Then restart the gateway.`,
+              `  Option 2 — Plugin config (openclaw.config.json):`,
+              `    { "telegramBotToken": "${token}" }`,
+              "",
+              "After configuring, restart the gateway and run: async-return health",
+            ].join("\n"),
+            data: { sendAdapter: "config.telegramBotToken", configured: true, botUsername },
+          };
+        } catch (error) {
+          result = {
+            ok: false,
+            action: "setup",
+            message: `Failed to contact Telegram API: ${error instanceof Error ? error.message : String(error)}`,
+            data: { sendAdapter: "none", configured: false, error: "network_error" },
+          };
+        }
+        break;
+      }
+
       case "help":
       default: {
         result = {
@@ -232,8 +312,29 @@ function missingArgument(action: string, argument: string): CommandResult {
   };
 }
 
+function buildSetupInstructions() {
+  return [
+    "No Telegram send adapter is configured (sendAdapter=none).",
+    "Tasks will be tracked but results cannot be delivered to Telegram.",
+    "",
+    "How to fix — choose one option:",
+    "  Option 1 — Environment variable (recommended):",
+    "    export TELEGRAM_BOT_TOKEN=<your-bot-token>",
+    "    Then restart the gateway.",
+    "  Option 2 — Plugin config (openclaw.config.json):",
+    '    { "telegramBotToken": "<your-bot-token>" }',
+    "  Option 3 — Let the host provide api.sendMessage (no token needed).",
+    "",
+    "To validate a token before configuring:",
+    "  async-return setup --token <your-bot-token>",
+    "",
+    "To get a Telegram bot token, talk to @BotFather on Telegram.",
+  ].join("\n");
+}
+
 function buildHelpText() {
   return [
+    "openclaw-telegram-async-return setup [--token <bot-token>]",
     "openclaw-telegram-async-return health",
     "openclaw-telegram-async-return recent --chat <chat-id> [--limit <n>] [--lookback <seconds>]",
     "openclaw-telegram-async-return status [--task <task-id>] [--chat <chat-id>] [--latest] [--lookback <seconds>]",
